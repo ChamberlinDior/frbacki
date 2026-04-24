@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "TPE Monitoring",
+    "slug": "tpe-monitoring-v2",
+    "version": "2.0.0",
+    "orientation": "portrait",
+    "scheme": "tpemonitoringv2",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "config": {
+        "googleMapsApiKey": "AIzaSyBViGGakHSvDKELeL_3xX3bcfpVddpFIUg"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0B1020"
+      },
+      "package": "com.orabank.tpemonitoringv2",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyBViGGakHSvDKELeL_3xX3bcfpVddpFIUg"
+        }
+      }
+    },
+    "web": {
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "TPE Monitoring utilise votre position pour surveiller les terminaux de paiement.",
+          "locationWhenInUsePermission": "TPE Monitoring utilise votre position pour surveiller les terminaux de paiement."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/notification-icon.png",
+          "color": "#2BE38B",
+          "sounds": []
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
