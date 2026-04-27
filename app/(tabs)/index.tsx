@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -65,7 +65,10 @@ export default function DashboardScreen() {
     isAlarmActive,
     stopAlarm,
     triggeredCount,
+    triggerSyntheticOutOfZoneAlert,
+    resolveSyntheticAlertForTerminal,
   } = useAlerts();
+  const previousZoneStatusRef = useRef<Map<number, 'inside' | 'outside' | 'unknown'>>(new Map());
 
   const currentDevices = useDeduplicatedDevices(terminals);
 
@@ -96,6 +99,26 @@ export default function DashboardScreen() {
   }, [loadData]);
 
   useLiveRefresh(loadData, 5000);
+
+  useEffect(() => {
+    const nextStatuses = new Map<number, 'inside' | 'outside' | 'unknown'>();
+
+    currentDevices.forEach((terminal) => {
+      const nextStatus = getGeofenceStatus(terminal);
+      const previousStatus = previousZoneStatusRef.current.get(terminal.id);
+      nextStatuses.set(terminal.id, nextStatus);
+
+      if (previousStatus === 'outside' && nextStatus !== 'outside') {
+        resolveSyntheticAlertForTerminal(terminal.id);
+      }
+
+      if (previousStatus != null && previousStatus !== 'outside' && nextStatus === 'outside') {
+        triggerSyntheticOutOfZoneAlert(terminal);
+      }
+    });
+
+    previousZoneStatusRef.current = nextStatuses;
+  }, [currentDevices, resolveSyntheticAlertForTerminal, triggerSyntheticOutOfZoneAlert]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -238,8 +261,8 @@ export default function DashboardScreen() {
                 <Text style={s.activeAlarmTitle}>ALARME ACTIVE SUR LE DASHBOARD</Text>
                 <Text style={s.activeAlarmText}>
                   {triggeredCount > 0
-                    ? `${triggeredCount} alerte${triggeredCount > 1 ? 's' : ''} critique${triggeredCount > 1 ? 's' : ''} détectée${triggeredCount > 1 ? 's' : ''}.`
-                    : "Une nouvelle alerte vient d'être détectée."}
+                    ? `${triggeredCount} alerte${triggeredCount > 1 ? 's' : ''} critique${triggeredCount > 1 ? 's' : ''} dÃ©tectÃ©e${triggeredCount > 1 ? 's' : ''}.`
+                    : "Une nouvelle alerte vient d'Ãªtre dÃ©tectÃ©e."}
                 </Text>
               </View>
             </View>
@@ -256,8 +279,8 @@ export default function DashboardScreen() {
             <Text style={s.overline}>Monitoring TPE</Text>
             <Text style={s.title}>Vue unique des terminaux</Text>
             <Text style={s.subtitle}>
-              Tableau principal deduplique — l&apos;etat courant de chaque terminal en temps reel.
-              Les nouvelles alertes déclenchent maintenant aussi la sirène depuis ce dashboard.
+              Tableau principal deduplique â€” l&apos;etat courant de chaque terminal en temps reel.
+              Les nouvelles alertes backend sont synchronisees toutes les 5 secondes.
             </Text>
 
             <View style={s.heroChips}>
@@ -613,7 +636,7 @@ function TerminalRow({
       </View>
 
       <Text style={[s.cell, s.textCell, columnStyle(8)]} numberOfLines={1}>
-        {terminal.lastAddressLine ?? terminal.city ?? '—'}
+        {terminal.lastAddressLine ?? terminal.city ?? 'â€”'}
       </Text>
       <Text style={[s.cell, s.textCell, columnStyle(9)]}>
         {terminal.totalConnectionCount ?? 0}

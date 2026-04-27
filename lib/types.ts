@@ -398,7 +398,7 @@ export type CreateSiteRequest = {
 };
 
 export type MovementAlert = {
-  id: number;
+  id?: number;
   terminalId: number;
   terminalName?: string | null;
   authorizedZoneName?: string | null;
@@ -420,6 +420,7 @@ export type MovementAlert = {
   zoneStatus?: string | null;
   eventKey?: string | null;
   message?: string | null;
+  source?: 'backend' | 'synthetic';
 };
 
 export type TerminalConnectionHistoryResponse = {
