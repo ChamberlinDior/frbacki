@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -61,37 +62,12 @@ export default function DashboardScreen() {
   const [historyRecords, setHistoryRecords] = useState<ConnectionHistoryItem[]>([]);
 
   const {
-    alerts: liveMovementAlerts,
-    triggerAlarm,
     isAlarmActive,
     stopAlarm,
     triggeredCount,
   } = useAlerts();
 
-  const previousAlertTotalRef = useRef<number | null>(null);
-  const alarmLockRef = useRef(false);
-
   const currentDevices = useDeduplicatedDevices(terminals);
-
-  const triggerDashboardAlarmIfNeeded = useCallback(
-    (nextTotal: number) => {
-      const previousTotal = previousAlertTotalRef.current;
-      previousAlertTotalRef.current = nextTotal;
-
-      if (previousTotal === null) return;
-      if (nextTotal <= previousTotal) return;
-      if (alarmLockRef.current) return;
-
-      alarmLockRef.current = true;
-
-      void triggerAlarm().finally(() => {
-        setTimeout(() => {
-          alarmLockRef.current = false;
-        }, 1500);
-      });
-    },
-    [triggerAlarm],
-  );
 
   const loadData = useCallback(async () => {
     try {
@@ -104,14 +80,12 @@ export default function DashboardScreen() {
 
       setTerminals(terminalList);
       setAlertTotal(alertPage.totalElements);
-
-      triggerDashboardAlarmIfNeeded(alertPage.totalElements);
     } catch (e) {
       const message =
         e instanceof ApiError ? e.message : 'Erreur de chargement du dashboard.';
       setError(message);
     }
-  }, [triggerDashboardAlarmIfNeeded]);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -122,10 +96,6 @@ export default function DashboardScreen() {
   }, [loadData]);
 
   useLiveRefresh(loadData, 5000);
-
-  useEffect(() => {
-    void loadData();
-  }, [liveMovementAlerts, loadData]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -281,7 +251,7 @@ export default function DashboardScreen() {
           </View>
         ) : null}
 
-        <View style={s.hero}>
+        <LinearGradient colors={['rgba(255,255,255,0.94)', 'rgba(230,239,250,0.9)']} style={s.hero}>
           <View style={s.heroCopy}>
             <Text style={s.overline}>Monitoring TPE</Text>
             <Text style={s.title}>Vue unique des terminaux</Text>
@@ -311,7 +281,7 @@ export default function DashboardScreen() {
               {alertTotal} alerte{alertTotal > 1 ? 's' : ''}
             </Text>
           </Pressable>
-        </View>
+        </LinearGradient>
 
         {error ? <NetworkErrorBanner message={error} onRetry={() => loadData()} /> : null}
 
@@ -773,16 +743,16 @@ const s = StyleSheet.create({
     borderRadius: 28,
     backgroundColor: UI.white,
     borderWidth: 1,
-    borderColor: UI.stroke,
+    borderColor: 'rgba(255,255,255,0.68)',
     padding: 22,
     flexDirection: 'row',
     gap: 16,
     alignItems: 'flex-start',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 2,
+    shadowColor: '#0F2940',
+    shadowOffset: { width: 0, height: 18 },
+    shadowOpacity: 0.1,
+    shadowRadius: 36,
+    elevation: 10,
   },
   heroCopy: {
     flex: 1,
@@ -864,16 +834,16 @@ const s = StyleSheet.create({
   kpiCard: {
     flexGrow: 1,
     minWidth: 160,
-    backgroundColor: UI.white,
+    backgroundColor: UI.card,
     borderRadius: 22,
     borderWidth: 1,
-    borderColor: UI.stroke,
+    borderColor: 'rgba(255,255,255,0.7)',
     padding: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.03,
-    shadowRadius: 4,
-    elevation: 1,
+    shadowColor: '#0F2940',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.06,
+    shadowRadius: 20,
+    elevation: 6,
   },
   kpiIcon: {
     width: 44,
@@ -941,16 +911,16 @@ const s = StyleSheet.create({
   },
 
   section: {
-    backgroundColor: UI.white,
+    backgroundColor: UI.card,
     borderRadius: 26,
     borderWidth: 1,
-    borderColor: UI.stroke,
+    borderColor: 'rgba(255,255,255,0.7)',
     padding: 18,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 2,
+    shadowColor: '#0F2940',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.06,
+    shadowRadius: 24,
+    elevation: 8,
   },
   sectionHead: {
     marginBottom: 14,

@@ -37,7 +37,7 @@ import { UI, toneColor } from '../../constants/theme';
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MODELS = ['Sunmi V2s', 'Sunmi V2 Pro', 'itel A6610L', 'SM-A336E', 'Urovo DT40'];
-const NETWORK_TYPES = ['WIFI', '4G', '3G', '2G', 'NONE'] as const;
+const NETWORK_TYPES = ['WIFI', 'CELL_4G', 'CELL_3G', 'CELL_2G', 'NONE'] as const;
 const EVENT_TYPES: EventType[] = [
   'LOW_BATTERY', 'OFFLINE', 'BACK_ONLINE', 'APP_CRASH',
   'SIM_CHANGE', 'GPS_ANOMALY', 'STORAGE_LOW', 'REBOOT', 'NETWORK_LOSS',
@@ -218,7 +218,7 @@ export default function SimulatorScreen() {
   const [telBattery, setTelBattery]         = useState(75);
   const [telSignal, setTelSignal]           = useState(3);
   const [telStorage, setTelStorage]         = useState(60);
-  const [telNetwork, setTelNetwork]         = useState<typeof NETWORK_TYPES[number]>('4G');
+  const [telNetwork, setTelNetwork]         = useState<typeof NETWORK_TYPES[number]>('CELL_4G');
   const [telGpsOn, setTelGpsOn]             = useState(true);
   const [telRealGps, setTelRealGps]         = useState<{ lat: number; lng: number } | null>(null);
   const [telCity, setTelCity]               = useState('Libreville');
@@ -292,7 +292,10 @@ export default function SimulatorScreen() {
         const net =
           data.networkType === 'WIFI'     ? 'WIFI' :
           data.networkType === 'ETHERNET' ? 'WIFI' :
-          data.networkType === 'NONE'     ? 'NONE' : '4G';
+          data.networkType === 'NONE'     ? 'NONE' :
+          data.networkType === 'CELL_3G'  ? 'CELL_3G' :
+          data.networkType === 'CELL_2G'  ? 'CELL_2G' :
+          'CELL_4G';
         setTelNetwork(net as any);
       }
 
@@ -526,7 +529,7 @@ export default function SimulatorScreen() {
       serialNumber: d.serialNumber, model: d.model,
       manufacturer: d.model?.startsWith('Sunmi') ? 'Sunmi' : 'Generic',
       batteryPercent: battery, charging: battery >= 95,
-      networkType: '4G', signalLevel: 3,
+      networkType: 'CELL_4G', signalLevel: 3,
       storageFreeMb: Math.round(0.6 * total), storageTotalMb: total,
       gpsLat: gps === undefined ? randomGPS().lat : gps?.lat ?? null,
       gpsLng: gps === undefined ? randomGPS().lng : gps?.lng ?? null,
@@ -605,6 +608,33 @@ export default function SimulatorScreen() {
     <LinearGradient colors={[UI.bgTop, UI.bgMid, UI.bgBot]} style={s.flex}>
       <SafeAreaView style={s.flex} edges={['top']}>
         <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+          <LinearGradient
+            colors={['rgba(14,165,233,0.22)', 'rgba(15,23,42,0.94)', 'rgba(3,7,18,0.98)']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={s.heroCard}
+          >
+            <View style={s.heroGlow} />
+            <View style={s.heroHeader}>
+              <View style={s.heroCopy}>
+                <Text style={s.heroEyebrow}>Simulation lab</Text>
+                <Text style={s.heroTitle}>Console de tests TPE</Text>
+                <Text style={s.heroSubtitle}>
+                  Enrolement, telemetrie, evenements et scenarios pilotes dans une interface de supervision.
+                </Text>
+              </View>
+              <View style={s.heroPill}>
+                <Ionicons name="flask-outline" size={16} color={UI.info} />
+                <Text style={s.heroPillText}>Mode testeur</Text>
+              </View>
+            </View>
+
+            <View style={s.metricRow}>
+              <MetricChip label="Terminaux charges" value={String(terminals.length)} tone="info" />
+              <MetricChip label="Auto push" value={autoRunning ? 'Actif' : 'Arret'} tone={autoRunning ? 'ok' : 'warn'} />
+              <MetricChip label="Scenario" value={scenarioRunning ? 'En cours' : 'Pret'} tone={scenarioRunning ? 'warn' : 'ok'} />
+            </View>
+          </LinearGradient>
 
           {/* ─── SECTION 1 — ENRÔLEMENT ───────────────────────────────────── */}
           <SectionCard title="Enrôler un TPE" icon="add-circle-outline">
@@ -912,6 +942,23 @@ function ScenarioBtn({
   );
 }
 
+function MetricChip({
+  label,
+  value,
+  tone = 'info',
+}: {
+  label: string;
+  value: string;
+  tone?: 'ok' | 'warn' | 'bad' | 'info';
+}) {
+  return (
+    <View style={[s.metricChip, { borderColor: `${toneColor(tone)}33` }]}>
+      <Text style={s.metricLabel}>{label}</Text>
+      <Text style={[s.metricValue, { color: toneColor(tone) }]}>{value}</Text>
+    </View>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Styles
 // ─────────────────────────────────────────────────────────────────────────────
@@ -920,46 +967,145 @@ const s = StyleSheet.create({
   flex:   { flex: 1 },
   scroll: { padding: 16, paddingBottom: 40, gap: 16 },
 
+  heroCard: {
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 28,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.18)',
+    shadowColor: '#020617',
+    shadowOpacity: 0.36,
+    shadowRadius: 26,
+    shadowOffset: { width: 0, height: 18 },
+    elevation: 16,
+  },
+  heroGlow: {
+    position: 'absolute',
+    top: -40,
+    right: -10,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: 'rgba(56,189,248,0.16)',
+  },
+  heroHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 16,
+    marginBottom: 18,
+  },
+  heroCopy: {
+    flex: 1,
+    maxWidth: 290,
+  },
+  heroEyebrow: {
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1.6,
+    color: UI.info,
+    marginBottom: 8,
+  },
+  heroTitle: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: UI.ink,
+    marginBottom: 8,
+  },
+  heroSubtitle: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: UI.muted,
+  },
+  heroPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(56,189,248,0.22)',
+    backgroundColor: 'rgba(15,23,42,0.52)',
+  },
+  heroPillText: {
+    color: UI.ink,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  metricRow: {
+    flexDirection: 'row',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  metricChip: {
+    flexGrow: 1,
+    minWidth: 100,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 18,
+    backgroundColor: 'rgba(9,15,30,0.58)',
+    borderWidth: 1,
+  },
+  metricLabel: {
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    color: UI.muted2,
+    marginBottom: 5,
+  },
+  metricValue: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+
   sectionCard: {
-    borderRadius: 16, overflow: 'hidden',
-    backgroundColor: UI.card, borderWidth: 1, borderColor: UI.stroke,
-    padding: 16, marginBottom: 0,
+    borderRadius: 24, overflow: 'hidden',
+    backgroundColor: 'rgba(10,18,34,0.62)', borderWidth: 1, borderColor: 'rgba(148,163,184,0.14)',
+    padding: 18, marginBottom: 0,
+    shadowColor: '#020617',
+    shadowOpacity: 0.22,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 10,
   },
   sectionHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    marginBottom: 14, paddingBottom: 10,
-    borderBottomWidth: 1, borderBottomColor: UI.stroke2,
+    marginBottom: 16, paddingBottom: 12,
+    borderBottomWidth: 1, borderBottomColor: 'rgba(148,163,184,0.14)',
   },
   sectionTitle: {
     fontSize: 14, fontWeight: '700', color: UI.ink,
-    textTransform: 'uppercase', letterSpacing: 0.5,
+    textTransform: 'uppercase', letterSpacing: 1,
   },
 
-  fieldLabel: { fontSize: 12, color: UI.muted2, marginBottom: 4 },
+  fieldLabel: { fontSize: 12, color: UI.muted2, marginBottom: 6, letterSpacing: 0.3 },
 
   input: {
-    backgroundColor: UI.card2, borderRadius: 10, borderWidth: 1,
-    borderColor: UI.stroke2, color: UI.ink, fontSize: 14,
-    paddingHorizontal: 12, paddingVertical: 9, marginBottom: 10,
+    backgroundColor: 'rgba(8,15,28,0.72)', borderRadius: 16, borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.14)', color: UI.ink, fontSize: 14,
+    paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12,
   },
 
   row: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
 
   genBtn: {
-    backgroundColor: UI.card2, borderRadius: 10, borderWidth: 1,
-    borderColor: UI.stroke2, padding: 10, marginBottom: 10,
+    backgroundColor: 'rgba(8,15,28,0.72)', borderRadius: 16, borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.14)', padding: 12, marginBottom: 12,
     alignItems: 'center', justifyContent: 'center',
   },
 
   btn: {
-    borderRadius: 10, borderWidth: 1,
-    paddingVertical: 11, alignItems: 'center', justifyContent: 'center',
-    marginBottom: 8, minHeight: 42,
+    borderRadius: 16, borderWidth: 1,
+    paddingVertical: 13, alignItems: 'center', justifyContent: 'center',
+    marginBottom: 8, minHeight: 46,
   },
   btnText: { fontSize: 14, fontWeight: '700' },
 
-  pill: { borderRadius: 20, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 5 },
-  pillText: { fontSize: 12, fontWeight: '600' },
+  pill: { borderRadius: 999, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 7 },
+  pillText: { fontSize: 12, fontWeight: '700' },
 
   toggleRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -972,43 +1118,53 @@ const s = StyleSheet.create({
   },
   sliderFill: { height: 6, backgroundColor: UI.ok, borderRadius: 3 },
   sliderBtn: {
-    backgroundColor: UI.card2, borderRadius: 6, padding: 6,
-    borderWidth: 1, borderColor: UI.stroke2,
+    backgroundColor: 'rgba(8,15,28,0.72)', borderRadius: 10, padding: 8,
+    borderWidth: 1, borderColor: 'rgba(148,163,184,0.14)',
   },
   stepBtn: {
-    borderRadius: 6, borderWidth: 1, borderColor: UI.stroke2,
-    paddingHorizontal: 6, paddingVertical: 2,
+    borderRadius: 8, borderWidth: 1, borderColor: 'rgba(148,163,184,0.14)',
+    paddingHorizontal: 7, paddingVertical: 3,
   },
   stepText: { fontSize: 10, color: UI.muted2 },
 
   warnBox: {
     flexDirection: 'row', gap: 6, alignItems: 'flex-start',
-    backgroundColor: UI.warnBg, borderRadius: 8, padding: 10, marginBottom: 8,
+    backgroundColor: 'rgba(120,53,15,0.16)', borderRadius: 14, padding: 12, marginBottom: 10,
+    borderWidth: 1, borderColor: 'rgba(251,191,36,0.2)',
   },
   warnText: { flex: 1, fontSize: 12, color: UI.warn },
 
   resultBox: {
-    backgroundColor: UI.okBg, borderRadius: 10, padding: 12, marginTop: 8,
-    borderWidth: 1, borderColor: UI.ok + '33',
+    backgroundColor: 'rgba(3,105,161,0.15)', borderRadius: 18, padding: 14, marginTop: 10,
+    borderWidth: 1, borderColor: 'rgba(56,189,248,0.28)',
   },
   resultTitle: { fontSize: 13, fontWeight: '700', color: UI.ok, marginBottom: 6 },
   resultLine:  { fontSize: 12, color: UI.ink, marginBottom: 2 },
 
   scenarioBtn: {
-    borderLeftWidth: 3, paddingLeft: 12, paddingVertical: 10,
-    backgroundColor: UI.card2, borderRadius: 8, marginBottom: 8,
-    borderTopRightRadius: 8, borderBottomRightRadius: 8,
+    borderLeftWidth: 3, paddingLeft: 14, paddingVertical: 14,
+    backgroundColor: 'rgba(8,15,28,0.72)', borderRadius: 18, marginBottom: 10,
+    borderTopRightRadius: 18, borderBottomRightRadius: 18,
     borderTopLeftRadius: 0, borderBottomLeftRadius: 0,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.12)',
   },
   scenarioLabel: { fontSize: 13, fontWeight: '700', marginBottom: 3 },
-  scenarioSub:   { fontSize: 11, color: UI.muted2 },
+  scenarioSub:   { fontSize: 11, color: UI.muted2, lineHeight: 16 },
 
   logHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, marginBottom: 6 },
   logTitle:  { fontSize: 12, fontWeight: '700', color: UI.muted2, textTransform: 'uppercase', letterSpacing: 0.5 },
   logClear:  { fontSize: 12, color: UI.bad },
   logEmpty:  { fontSize: 12, color: UI.faint, fontStyle: 'italic', textAlign: 'center', padding: 12 },
-  logBox:    { backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: 8, maxHeight: 280 },
-  logEntry:  { flexDirection: 'row', gap: 8, marginBottom: 5 },
+  logBox:    {
+    backgroundColor: 'rgba(2,6,23,0.66)',
+    borderRadius: 18,
+    padding: 12,
+    maxHeight: 280,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.12)',
+  },
+  logEntry:  { flexDirection: 'row', gap: 8, marginBottom: 7 },
   logTs:     { fontSize: 10, color: UI.faint, width: 60, flexShrink: 0 },
-  logMsg:    { fontSize: 11, flex: 1 },
+  logMsg:    { fontSize: 11, flex: 1, lineHeight: 16 },
 });

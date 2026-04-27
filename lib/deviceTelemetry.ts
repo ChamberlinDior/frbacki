@@ -38,7 +38,6 @@ export async function getCurrentLocationTelemetry() {
         Platform.OS === 'android'
           ? Location.Accuracy.Highest
           : Location.Accuracy.BestForNavigation,
-      maximumAge: 0,
       mayShowUserSettingsDialog: true,
     });
 

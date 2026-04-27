@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import * as Location from 'expo-location';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -6,7 +7,9 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Linking,
   Pressable,
+  useWindowDimensions,
   RefreshControl,
   Platform,
   Switch,
@@ -16,15 +19,15 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { alertsApi, terminalsApi } from '../../lib/api';
-import type { AlertResponse, EventSeverity, TerminalSummary } from '../../lib/types';
+import { alertsApi, movementAlertsApi, terminalsApi } from '../../lib/api';
+import type { AlertResponse, EventSeverity, MovementAlert, TerminalSummary } from '../../lib/types';
 import { UI, toneBg, toneColor } from '../../constants/theme';
 import { NetworkErrorBanner } from '../../components/NetworkErrorBanner';
 import { AlertRouteMap } from '../../components/AlertRouteMap';
 import { GeofenceStatusBadge } from '../../components/GeofenceStatusBadge';
 import { useAlerts } from '../../contexts/AlertContext';
 import { useLiveRefresh } from '../../hooks/useLiveRefresh';
-import { getGeofenceAlertMessage } from '../../lib/geofenceUtils';
+import { getGeofenceAlertMessage, getGeofenceStatus } from '../../lib/geofenceUtils';
 import { getTerminalName } from '../../lib/terminalPresentation';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,6 +101,17 @@ type InternalGroupedAlert = GroupedAlert & {
   businessKeys: Set<string>;
 };
 
+type HistoryItem = {
+  id: string;
+  title: string;
+  subtitle: string;
+  meta: string;
+  timestamp: number;
+  tone: 'ok' | 'warn' | 'bad' | 'info';
+  terminalId: number;
+  action: 'TRACK' | 'OPEN';
+};
+
 function toTimestamp(value?: string | null): number {
   if (!value) return 0;
 
@@ -118,6 +132,12 @@ function formatDateLabel(iso?: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function formatDistanceLabel(meters?: number | null): string {
+  if (meters == null) return 'Distance indisponible';
+  if (meters >= 1000) return `${(meters / 1000).toFixed(2)} km`;
+  return `${Math.round(meters)} m`;
 }
 
 /**
@@ -230,7 +250,10 @@ function groupAlertsByTerminal(alerts: AlertResponse[]): GroupedAlert[] {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function AlertsScreen() {
+  const { width } = useWindowDimensions();
+  const isWide = width >= 1180;
   const [alerts, setAlerts] = useState<AlertResponse[]>([]);
+  const [movementHistory, setMovementHistory] = useState<MovementAlert[]>([]);
   const [terminals, setTerminals] = useState<TerminalSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -265,13 +288,15 @@ export default function AlertsScreen() {
     try {
       setError(null);
 
-      const [alertPage, terminalList] = await Promise.all([
+      const [alertPage, terminalList, movementPage] = await Promise.all([
         alertsApi.list(0, 200),
         terminalsApi.list(),
+        movementAlertsApi.list(undefined, 0, 80),
       ]);
 
       setAlerts(alertPage.content);
       setTerminals(terminalList);
+      setMovementHistory(movementPage.content);
     } catch (e: any) {
       setError(e.message ?? 'Erreur de chargement des alertes.');
     }
@@ -285,7 +310,7 @@ export default function AlertsScreen() {
     })();
   }, [loadData]);
 
-  useLiveRefresh(loadData, 5000);
+  useLiveRefresh(loadData, 1500);
 
   useEffect(() => {
     void loadData();
@@ -387,8 +412,93 @@ export default function AlertsScreen() {
     [groupedAlerts],
   );
 
+  const recentMovementHistory = useMemo(
+    () =>
+      [...movementHistory]
+        .sort((a, b) => toTimestamp(b.triggeredAt) - toTimestamp(a.triggeredAt))
+        .slice(0, 8),
+    [movementHistory],
+  );
+
+  const recentEventHistory = useMemo(
+    () =>
+      [...alerts]
+        .sort((a, b) => toTimestamp(b.eventTimestamp) - toTimestamp(a.eventTimestamp))
+        .slice(0, 8),
+    [alerts],
+  );
+
   const selectedTerminal =
     (selectedTerminalId != null ? terminalsById.get(selectedTerminalId) : null) ?? null;
+
+  const alertHistoryItems = useMemo<HistoryItem[]>(() => {
+    const movementItems = recentMovementHistory.map((alert) => {
+      const terminal = terminalsById.get(alert.terminalId);
+      const title = alert.terminalName ?? (terminal ? getTerminalName(terminal) : `Terminal #${alert.terminalId}`);
+      const statusLabel =
+        alert.status === 'TRIGGERED'
+          ? 'Alerte active'
+          : alert.status === 'ACKNOWLEDGED'
+            ? 'Alerte confirmee'
+            : 'Retour en zone';
+      const tone: HistoryItem['tone'] =
+        alert.status === 'RESOLVED'
+          ? 'ok'
+          : alert.status === 'ACKNOWLEDGED'
+            ? 'warn'
+            : 'bad';
+
+      return {
+        id: `movement-${alert.id}`,
+        title,
+        subtitle: `${statusLabel} • ${formatDistanceLabel(alert.distanceFromBase)}`,
+        meta: formatDateLabel(alert.resolvedAt ?? alert.acknowledgedAt ?? alert.triggeredAt),
+        timestamp: toTimestamp(alert.resolvedAt ?? alert.acknowledgedAt ?? alert.triggeredAt),
+        tone,
+        terminalId: alert.terminalId,
+        action: 'TRACK' as const,
+      };
+    });
+
+    const eventItems = recentEventHistory.map((alert) => {
+      const terminal = terminalsById.get(alert.terminalId);
+      return {
+        id: `event-${alert.id}`,
+        title: terminal ? getTerminalName(terminal) : `Terminal #${alert.terminalId}`,
+        subtitle: `${EVENT_LABELS[alert.type] ?? alert.type} • ${alert.message ?? 'Alerte technique'}`,
+        meta: formatDateLabel(alert.eventTimestamp),
+        timestamp: toTimestamp(alert.eventTimestamp),
+        tone: SEVERITY_TONE[alert.severity] ?? 'info',
+        terminalId: alert.terminalId,
+        action: 'OPEN' as const,
+      };
+    });
+
+    return [...movementItems, ...eventItems]
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 10);
+  }, [recentMovementHistory, recentEventHistory, terminalsById]);
+
+  const selectedTerminalCoords =
+    selectedTerminal?.lastGpsLat != null && selectedTerminal?.lastGpsLng != null
+      ? {
+          latitude: selectedTerminal.lastGpsLat,
+          longitude: selectedTerminal.lastGpsLng,
+        }
+      : null;
+
+  async function openExternalNavigation() {
+    if (!selectedTerminalCoords) return;
+
+    const { latitude, longitude } = selectedTerminalCoords;
+    const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}&travelmode=driving`;
+
+    try {
+      await Linking.openURL(googleMapsUrl);
+    } catch {
+      Alert.alert('Navigation indisponible', "Impossible d'ouvrir l'application de cartographie.");
+    }
+  }
 
   async function handleAcknowledgeAll(group: GroupedAlert) {
     const count = group.alertIds.length;
@@ -430,7 +540,7 @@ export default function AlertsScreen() {
       <FlatList
         data={filtered}
         keyExtractor={(item) => String(item.terminalId)}
-        contentContainerStyle={s.content}
+        contentContainerStyle={[s.content, isWide && s.contentWide]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={UI.info} />
         }
@@ -460,7 +570,7 @@ export default function AlertsScreen() {
               </View>
             ) : null}
 
-            <View style={s.hero}>
+            <LinearGradient colors={['rgba(255,255,255,0.94)', 'rgba(229,238,249,0.88)']} style={s.hero}>
               <View style={s.heroCopy}>
                 <Text style={s.overline}>Centre d'alertes</Text>
                 <Text style={s.title}>Alertes techniques</Text>
@@ -504,7 +614,7 @@ export default function AlertsScreen() {
                   </>
                 ) : null}
               </View>
-            </View>
+            </LinearGradient>
 
             {error ? <NetworkErrorBanner message={error} onRetry={() => loadData()} /> : null}
 
@@ -550,6 +660,11 @@ export default function AlertsScreen() {
                       {getGeofenceAlertMessage(selectedTerminal) ??
                         'Trajet de rapprochement vers le TPE cible.'}
                     </Text>
+                    {selectedTerminalCoords ? (
+                      <Text style={s.routeMetaText}>
+                        Position exacte: {selectedTerminalCoords.latitude.toFixed(5)}, {selectedTerminalCoords.longitude.toFixed(5)}
+                      </Text>
+                    ) : null}
                   </View>
 
                   <View style={s.routeHeadRight}>
@@ -586,6 +701,14 @@ export default function AlertsScreen() {
                   </Pressable>
 
                   <Pressable
+                    style={[s.routeActionBtn, s.routeActionBtnNavigate]}
+                    onPress={() => void openExternalNavigation()}
+                  >
+                    <Ionicons name="navigate-outline" size={16} color="#dbeafe" />
+                    <Text style={s.routeActionBtnTextNavigate}>Ouvrir l'itineraire</Text>
+                  </Pressable>
+
+                  <Pressable
                     style={[s.routeActionBtn, s.routeActionBtnSecondary]}
                     onPress={() => setSelectedTerminalId(null)}
                   >
@@ -595,6 +718,51 @@ export default function AlertsScreen() {
                 </View>
               </View>
             ) : null}
+
+            <View style={s.historyPanel}>
+              <View style={s.historyPanelHeader}>
+                <View>
+                  <Text style={s.historyEyebrow}>Historique de supervision</Text>
+                  <Text style={s.historyTitle}>Alertes recentes et cycles hors zone</Text>
+                </View>
+                <Text style={s.historyCount}>{alertHistoryItems.length} traces visibles</Text>
+              </View>
+
+              <View style={s.historyGrid}>
+                {alertHistoryItems.map((item) => (
+                  <Pressable
+                    key={item.id}
+                    style={s.historyCard}
+                    onPress={() => {
+                      if (item.action === 'TRACK') {
+                        setSelectedTerminalId(item.terminalId);
+                        return;
+                      }
+                      router.push(`/terminal/${item.terminalId}` as any);
+                    }}
+                  >
+                    <View style={[s.historyDot, { backgroundColor: toneColor(item.tone) }]} />
+                    <View style={s.historyCardBody}>
+                      <View style={s.historyCardTop}>
+                        <Text style={s.historyCardTitle} numberOfLines={1}>{item.title}</Text>
+                        <Text style={s.historyCardMeta}>{item.meta}</Text>
+                      </View>
+                      <Text style={s.historyCardSubtitle} numberOfLines={2}>{item.subtitle}</Text>
+                      <View style={s.historyActionRow}>
+                        <Text style={[s.historyActionText, { color: toneColor(item.tone) }]}>
+                          {item.action === 'TRACK' ? 'Suivre sur la carte' : 'Ouvrir la fiche'}
+                        </Text>
+                        <Ionicons
+                          name={item.action === 'TRACK' ? 'navigate-outline' : 'open-outline'}
+                          size={15}
+                          color={toneColor(item.tone)}
+                        />
+                      </View>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
 
             <View style={s.filtersRow}>
               {(['ALL', 'INFO', 'WARN', 'CRITICAL'] as SeverityFilter[]).map((severity) => (
@@ -697,7 +865,7 @@ function GroupedAlertCard({
 }) {
   const tone = SEVERITY_TONE[group.highestSeverity] ?? 'info';
   const isCritical = group.highestSeverity === 'CRITICAL';
-  const isGeofence = Boolean(terminal?.outsideAuthorizedZone);
+  const isGeofence = getGeofenceStatus(terminal) === 'outside';
 
   return (
     <Pressable
@@ -854,6 +1022,12 @@ const s = StyleSheet.create({
     gap: 14,
     paddingBottom: 40,
   },
+  contentWide: {
+    width: '100%',
+    maxWidth: 1460,
+    alignSelf: 'center',
+    paddingHorizontal: 24,
+  },
 
   alarmBanner: {
     backgroundColor: '#12020A',
@@ -918,13 +1092,18 @@ const s = StyleSheet.create({
   },
 
   hero: {
-    backgroundColor: UI.white,
+    backgroundColor: UI.card,
     borderRadius: 26,
     borderWidth: 1,
-    borderColor: UI.stroke,
+    borderColor: 'rgba(255,255,255,0.7)',
     padding: 20,
     flexDirection: 'row',
     gap: 12,
+    shadowColor: '#0F2940',
+    shadowOffset: { width: 0, height: 18 },
+    shadowOpacity: 0.1,
+    shadowRadius: 28,
+    elevation: 10,
   },
   heroCopy: {
     flex: 1,
@@ -942,6 +1121,9 @@ const s = StyleSheet.create({
     fontSize: 26,
     fontWeight: '900',
     letterSpacing: -0.5,
+    textShadowColor: 'rgba(22,95,205,0.14)',
+    textShadowOffset: { width: 0, height: 10 },
+    textShadowRadius: 22,
   },
   subtitle: {
     marginTop: 8,
@@ -1026,11 +1208,16 @@ const s = StyleSheet.create({
   kpiCard: {
     flexGrow: 1,
     minWidth: 140,
-    backgroundColor: UI.white,
+    backgroundColor: UI.card,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: UI.stroke,
+    borderColor: 'rgba(255,255,255,0.68)',
     padding: 14,
+    shadowColor: '#0F2940',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.06,
+    shadowRadius: 18,
+    elevation: 6,
   },
   kpiCardHighlight: {
     borderColor: '#F2C8C8',
@@ -1058,16 +1245,16 @@ const s = StyleSheet.create({
   },
 
   routePanel: {
-    backgroundColor: UI.white,
+    backgroundColor: UI.card,
     borderRadius: 24,
     borderWidth: 1.5,
-    borderColor: UI.stroke,
+    borderColor: 'rgba(255,255,255,0.7)',
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 4,
+    shadowColor: '#0F2940',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    elevation: 8,
   },
   routePanelHeader: {
     flexDirection: 'row',
@@ -1113,6 +1300,12 @@ const s = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
   },
+  routeMetaText: {
+    marginTop: 10,
+    color: UI.info,
+    fontSize: 12,
+    fontWeight: '800',
+  },
   routeHeadRight: {
     alignItems: 'flex-end',
     gap: 8,
@@ -1145,8 +1338,16 @@ const s = StyleSheet.create({
   routeActionBtnSecondary: {
     backgroundColor: UI.card2,
   },
+  routeActionBtnNavigate: {
+    backgroundColor: 'rgba(22,95,205,0.82)',
+  },
   routeActionBtnText: {
     color: UI.info,
+    fontWeight: '900',
+    fontSize: 13,
+  },
+  routeActionBtnTextNavigate: {
+    color: '#eff6ff',
     fontWeight: '900',
     fontSize: 13,
   },
@@ -1154,6 +1355,101 @@ const s = StyleSheet.create({
     color: UI.muted,
     fontWeight: '800',
     fontSize: 13,
+  },
+
+  historyPanel: {
+    backgroundColor: 'rgba(8,15,28,0.72)',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.14)',
+    padding: 16,
+    gap: 14,
+  },
+  historyPanelHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  historyEyebrow: {
+    color: UI.info,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.3,
+    textTransform: 'uppercase',
+  },
+  historyTitle: {
+    marginTop: 6,
+    color: '#f8fbff',
+    fontSize: 19,
+    fontWeight: '900',
+    textShadowColor: 'rgba(56,189,248,0.18)',
+    textShadowOffset: { width: 0, height: 6 },
+    textShadowRadius: 18,
+  },
+  historyCount: {
+    color: UI.muted2,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  historyGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  historyCard: {
+    flexGrow: 1,
+    minWidth: 260,
+    maxWidth: 420,
+    flexDirection: 'row',
+    gap: 12,
+    padding: 14,
+    borderRadius: 18,
+    backgroundColor: 'rgba(15,23,42,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.14)',
+  },
+  historyDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+    marginTop: 6,
+  },
+  historyCardBody: {
+    flex: 1,
+    gap: 6,
+  },
+  historyCardTop: {
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  historyCardTitle: {
+    flex: 1,
+    color: '#f8fbff',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  historyCardMeta: {
+    color: '#93a9be',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  historyCardSubtitle: {
+    color: '#c7d5e2',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  historyActionRow: {
+    marginTop: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  historyActionText: {
+    fontSize: 12,
+    fontWeight: '800',
   },
 
   filtersRow: {
@@ -1202,18 +1498,18 @@ const s = StyleSheet.create({
   },
 
   card: {
-    backgroundColor: UI.white,
+    backgroundColor: UI.card,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: UI.stroke,
+    borderColor: 'rgba(255,255,255,0.68)',
     marginBottom: 10,
     flexDirection: 'row',
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowColor: '#0F2940',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.06,
+    shadowRadius: 18,
+    elevation: 6,
   },
   cardCritical: {
     borderColor: '#F0C0C0',

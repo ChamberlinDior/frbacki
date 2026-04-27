@@ -24,6 +24,12 @@ import type {
   UpdateTerminalSettingsRequest,
 } from './types';
 
+type WrappedApiResponse<T> = {
+  success?: boolean;
+  message?: string | null;
+  data: T;
+};
+
 const RAW_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL?.trim() ||
   'http://192.168.1.70:8080/api';
@@ -143,6 +149,18 @@ async function fetchAndParse<T>(
   return response.json() as Promise<T>;
 }
 
+function unwrapApiResponse<T>(response: T | WrappedApiResponse<T>): T {
+  if (
+    response &&
+    typeof response === 'object' &&
+    'data' in (response as Record<string, unknown>)
+  ) {
+    return (response as WrappedApiResponse<T>).data;
+  }
+
+  return response as T;
+}
+
 export const authApi = {
   login: (body: AuthRequest) => request<AuthResponse>('POST', '/auth/login', body),
 };
@@ -200,14 +218,24 @@ export const movementAlertsApi = {
   list: (status?: MovementAlertStatus, page = 0, size = 50) => {
     const p = new URLSearchParams({ page: String(page), size: String(size) });
     if (status) p.set('status', status);
-    return request<PageResponse<MovementAlert>>('GET', `/alerts/movement?${p.toString()}`);
+    return request<WrappedApiResponse<PageResponse<MovementAlert>>>(
+      'GET',
+      `/alerts/movement?${p.toString()}`,
+    ).then(unwrapApiResponse);
   },
   listByTerminal: (terminalId: number, page = 0, size = 20) =>
-    request<PageResponse<MovementAlert>>(
+    request<WrappedApiResponse<PageResponse<MovementAlert>>>(
       'GET',
       `/alerts/movement/terminal/${terminalId}?page=${page}&size=${size}`,
+    ).then(unwrapApiResponse),
+  acknowledge: (id: number) =>
+    request<WrappedApiResponse<MovementAlert>>('PATCH', `/alerts/movement/${id}/acknowledge`).then(
+      unwrapApiResponse,
     ),
-  resolve: (id: number) => request<MovementAlert>('PATCH', `/alerts/movement/${id}/resolve`),
+  resolve: (id: number) =>
+    request<WrappedApiResponse<MovementAlert>>('PATCH', `/alerts/movement/${id}/resolve`).then(
+      unwrapApiResponse,
+    ),
 };
 
 export const incidentsApi = {

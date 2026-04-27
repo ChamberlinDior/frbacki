@@ -1,14 +1,3 @@
-/**
- * contexts/AlertContext.tsx
- * Connexion STOMP WebSocket temps réel — alertes de mouvement GPS
- *
- * IMPORTANT :
- * Ce context NE JOUE PLUS automatiquement la sirène sur chaque status TRIGGERED.
- * Il stocke les alertes live, affiche les notifications si nécessaire,
- * mais le déclenchement sonore métier doit être fait par les pages qui connaissent
- * l'état réel du TPE : inside / outside zone.
- */
-
 import React, {
   createContext,
   useCallback,
@@ -24,7 +13,7 @@ import * as Notifications from 'expo-notifications';
 
 import type { MovementAlert } from '../lib/types';
 import * as tokenStore from '../lib/tokenStore';
-import { getWebSocketUrl } from '../lib/api';
+import { getWebSocketUrl, movementAlertsApi } from '../lib/api';
 import {
   isWebAudioUnlocked,
   playAlertSound,
@@ -49,6 +38,7 @@ Notifications.setNotificationHandler({
 type AlertContextValue = {
   alerts: MovementAlert[];
   latestAlert: MovementAlert | null;
+  activeOutOfZoneAlert: MovementAlert | null;
   triggeredCount: number;
   connected: boolean;
   soundEnabled: boolean;
@@ -61,6 +51,7 @@ type AlertContextValue = {
   testSound: () => Promise<boolean>;
   triggerAlarm: (alert?: MovementAlert) => Promise<void>;
   stopAlarm: () => void;
+  acknowledgeActiveOutOfZoneAlert: () => Promise<boolean>;
   clearAlert: (id: number) => void;
   clearAll: () => void;
 };
@@ -68,6 +59,7 @@ type AlertContextValue = {
 const AlertContext = createContext<AlertContextValue>({
   alerts: [],
   latestAlert: null,
+  activeOutOfZoneAlert: null,
   triggeredCount: 0,
   connected: false,
   soundEnabled: true,
@@ -80,6 +72,7 @@ const AlertContext = createContext<AlertContextValue>({
   testSound: async () => false,
   triggerAlarm: async () => {},
   stopAlarm: () => {},
+  acknowledgeActiveOutOfZoneAlert: async () => false,
   clearAlert: () => {},
   clearAll: () => {},
 });
@@ -90,54 +83,31 @@ export function useAlerts() {
 
 function getSavedSoundEnabled(): boolean {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return true;
-
   const raw = window.localStorage.getItem('tpe-alert-sound-enabled');
   return raw == null ? true : raw === 'true';
 }
 
 function getSavedWebAudioUnlocked(): boolean {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return false;
-
   return window.localStorage.getItem('tpe-alert-web-audio-unlocked') === 'true';
 }
 
 function getAlertId(alert: MovementAlert): number | string {
-  const rawId = (alert as any)?.id;
-
-  if (rawId !== undefined && rawId !== null) {
-    return rawId;
-  }
-
-  const terminalId = (alert as any)?.terminalId ?? (alert as any)?.terminal?.id ?? 'terminal';
-  const createdAt =
-    (alert as any)?.createdAt ??
-    (alert as any)?.eventTimestamp ??
-    (alert as any)?.timestamp ??
-    Date.now();
-
-  return `${terminalId}-${createdAt}`;
+  return alert.id ?? `${alert.terminalId}-${alert.triggeredAt}`;
 }
 
 function getAlertTitle(alert?: MovementAlert): string {
-  if (!alert) return 'Alerte TPE déclenchée';
-
-  const terminalName =
-    (alert as any).terminalName ??
-    (alert as any).deviceKey ??
-    (alert as any).terminalLabel ??
-    ((alert as any).terminalId ? `Terminal #${(alert as any).terminalId}` : 'Terminal inconnu');
-
-  return `Alerte TPE — ${terminalName}`;
+  if (!alert) return 'TP hors zone autorisee';
+  return alert.terminalName
+    ? `TP hors zone autorisee - ${alert.terminalName}`
+    : `TP hors zone autorisee - Terminal #${alert.terminalId}`;
 }
 
 function getAlertBody(alert?: MovementAlert): string {
-  if (!alert) return 'Une nouvelle alerte a été détectée.';
-
+  if (!alert) return 'Une nouvelle alerte critique a ete detectee.';
   return (
-    (alert as any).message ??
-    (alert as any).description ??
-    (alert as any).type ??
-    'Une nouvelle alerte critique a été détectée.'
+    alert.message ??
+    `${alert.terminalName ?? `Terminal #${alert.terminalId}`} a quitte sa zone autorisee.`
   );
 }
 
@@ -157,21 +127,28 @@ async function configureNotificationChannel() {
 export function AlertProvider({ children }: { children: React.ReactNode }) {
   const [alerts, setAlerts] = useState<MovementAlert[]>([]);
   const [latestAlert, setLatestAlert] = useState<MovementAlert | null>(null);
+  const [activeOutOfZoneAlertId, setActiveOutOfZoneAlertId] = useState<number | string | null>(null);
   const [connected, setConnected] = useState(false);
   const [isAlarmActive, setIsAlarmActive] = useState(false);
   const [soundEnabled, setSoundEnabledState] = useState(getSavedSoundEnabled);
   const [webAudioUnlocked, setWebAudioUnlocked] = useState(getSavedWebAudioUnlocked);
-  const [notificationPermission, setNotificationPermission] =
-    useState<PermissionState>('unknown');
+  const [notificationPermission, setNotificationPermission] = useState<PermissionState>('unknown');
   const [soundPermissionMessage, setSoundPermissionMessage] = useState<string | null>(
     Platform.OS === 'web'
-      ? 'Cliquez sur “Activer” une première fois pour autoriser le navigateur à jouer la sirène automatiquement.'
+      ? 'Cliquez sur "Activer" une premiere fois pour autoriser le navigateur a jouer la sirene automatiquement.'
       : null,
   );
 
   const clientRef = useRef<Client | null>(null);
   const seenAlertIdsRef = useRef<Set<number | string>>(new Set());
+  const queuedAlarmIdsRef = useRef<Set<number | string>>(new Set());
+  const alarmQueueRef = useRef<Array<number | string>>([]);
   const soundEnabledRef = useRef(soundEnabled);
+
+  const activeOutOfZoneAlert = useMemo(
+    () => alerts.find((alert) => getAlertId(alert) === activeOutOfZoneAlertId) ?? null,
+    [activeOutOfZoneAlertId, alerts],
+  );
 
   useEffect(() => {
     soundEnabledRef.current = soundEnabled;
@@ -179,17 +156,12 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
-
     window.localStorage.setItem('tpe-alert-sound-enabled', String(soundEnabled));
   }, [soundEnabled]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
-
-    window.localStorage.setItem(
-      'tpe-alert-web-audio-unlocked',
-      String(webAudioUnlocked),
-    );
+    window.localStorage.setItem('tpe-alert-web-audio-unlocked', String(webAudioUnlocked));
   }, [webAudioUnlocked]);
 
   useEffect(() => {
@@ -198,9 +170,7 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
     async function bootstrapPermissions() {
       try {
         await configureNotificationChannel();
-
         const current = await Notifications.getPermissionsAsync();
-
         if (!mounted) return;
 
         if (current.granted) {
@@ -217,8 +187,7 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    bootstrapPermissions();
-
+    void bootstrapPermissions();
     return () => {
       mounted = false;
     };
@@ -230,7 +199,6 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
 
     try {
       await configureNotificationChannel();
-
       const current = await Notifications.getPermissionsAsync();
       const finalPermission = current.granted
         ? current
@@ -249,32 +217,21 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
       if (Platform.OS === 'web') {
         const unlocked = isWebAudioUnlocked();
         setWebAudioUnlocked(unlocked);
-
-        if (unlocked) {
-          setSoundPermissionMessage(null);
-        } else {
-          setSoundPermissionMessage(
-            "Le navigateur bloque encore le son. Cliquez sur “Activer”, puis vérifiez l’autorisation audio du site.",
-          );
-        }
+        setSoundPermissionMessage(
+          unlocked
+            ? null
+            : 'Le navigateur bloque encore le son. Cliquez sur "Activer", puis verifiez l autorisation audio du site.',
+        );
       } else {
         setWebAudioUnlocked(true);
-
-        if (soundOk) {
-          setSoundPermissionMessage(null);
-        } else {
-          setSoundPermissionMessage(
-            "Le son n'a pas pu être initialisé sur ce téléphone.",
-          );
-        }
+        setSoundPermissionMessage(soundOk ? null : "Le son n'a pas pu etre initialise sur ce telephone.");
       }
     } catch {
       soundOk = false;
-
       setSoundPermissionMessage(
         Platform.OS === 'web'
-          ? "Le navigateur a bloqué le son. Cliquez sur “Activer” depuis la bannière."
-          : "Le son n'a pas pu être initialisé sur ce téléphone.",
+          ? 'Le navigateur a bloque le son. Cliquez sur "Activer" depuis la banniere.'
+          : "Le son n'a pas pu etre initialise sur ce telephone.",
       );
     }
 
@@ -284,7 +241,6 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
   const showLocalNotification = useCallback(async (alert?: MovementAlert) => {
     try {
       const permission = await Notifications.getPermissionsAsync();
-
       if (!permission.granted) return;
 
       await Notifications.scheduleNotificationAsync({
@@ -310,62 +266,108 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
 
       await showLocalNotification(alert);
 
-      if (!soundEnabledRef.current) return;
+      if (!soundEnabledRef.current) {
+        return;
+      }
 
       const ok = await playAlertSound();
-
       if (ok) {
         setIsAlarmActive(true);
         setSoundPermissionMessage(null);
-
         if (Platform.OS === 'web') {
           setWebAudioUnlocked(true);
         }
-
         return;
       }
 
       setIsAlarmActive(false);
-
       setSoundPermissionMessage(
         Platform.OS === 'web'
-          ? "Le son automatique est bloqué par le navigateur. Cliquez sur “Activer”, puis testez la sirène."
-          : "Impossible de jouer le son d'alerte sur ce téléphone.",
+          ? 'Le son automatique est bloque par le navigateur. Cliquez sur "Activer", puis testez la sirene.'
+          : "Impossible de jouer le son d'alerte sur ce telephone.",
       );
     },
     [showLocalNotification],
   );
 
-  const upsert = useCallback((incoming: MovementAlert) => {
-    const alertId = getAlertId(incoming);
-    const isNew = !seenAlertIdsRef.current.has(alertId);
+  const stopAlarm = useCallback(() => {
+    void stopAlertSound();
+    setIsAlarmActive(false);
+  }, []);
 
-    if (isNew) {
-      seenAlertIdsRef.current.add(alertId);
-    }
+  const playQueuedAlarm = useCallback(
+    async (alertId: number | string) => {
+      const alert = alerts.find((item) => getAlertId(item) === alertId) ?? null;
+      setActiveOutOfZoneAlertId(alertId);
+      await triggerAlarm(alert ?? undefined);
+    },
+    [alerts, triggerAlarm],
+  );
 
-    setLatestAlert(incoming);
+  const removeFromQueue = useCallback(
+    (alertId: number | string, stopCurrentSound: boolean) => {
+      alarmQueueRef.current = alarmQueueRef.current.filter((id) => id !== alertId);
+      queuedAlarmIdsRef.current.delete(alertId);
 
-    setAlerts((prev) => {
-      const idx = prev.findIndex((a) => getAlertId(a) === alertId);
+      const wasActive = activeOutOfZoneAlertId === alertId;
+      const nextId = alarmQueueRef.current[0] ?? null;
 
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = incoming;
-        return next;
+      if (!wasActive) {
+        return;
       }
 
-      return [incoming, ...prev].slice(0, 100);
-    });
+      setActiveOutOfZoneAlertId(nextId);
 
-    /**
-     * IMPORTANT :
-     * On ne joue plus le son ici.
-     * Le Context ne sait pas si le TPE est réellement dans ou hors zone bleue.
-     * Les pages Dashboard / Telemetry, qui ont terminalsApi.list(),
-     * déclenchent la sirène uniquement sur transition INSIDE -> OUTSIDE.
-     */
-  }, []);
+      if (stopCurrentSound) {
+        void stopAlertSound();
+        setIsAlarmActive(false);
+      }
+
+      if (nextId != null) {
+        void playQueuedAlarm(nextId);
+      }
+    },
+    [activeOutOfZoneAlertId, playQueuedAlarm],
+  );
+
+  const upsert = useCallback(
+    (incoming: MovementAlert) => {
+      const alertId = getAlertId(incoming);
+      const isNew = !seenAlertIdsRef.current.has(alertId);
+      if (isNew) {
+        seenAlertIdsRef.current.add(alertId);
+      }
+
+      setLatestAlert(incoming);
+      setAlerts((prev) => {
+        const idx = prev.findIndex((item) => getAlertId(item) === alertId);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = incoming;
+          return next;
+        }
+        return [incoming, ...prev].slice(0, 150);
+      });
+
+      const isTriggered = incoming.status === 'TRIGGERED' && incoming.soundRequired !== false;
+      const isClosed = incoming.status === 'ACKNOWLEDGED' || incoming.status === 'RESOLVED';
+
+      if (isTriggered && !queuedAlarmIdsRef.current.has(alertId)) {
+        alarmQueueRef.current = [...alarmQueueRef.current, alertId];
+        queuedAlarmIdsRef.current.add(alertId);
+
+        if (alarmQueueRef.current.length === 1) {
+          setActiveOutOfZoneAlertId(alertId);
+          void triggerAlarm(incoming);
+        }
+      }
+
+      if (isClosed) {
+        removeFromQueue(alertId, activeOutOfZoneAlertId === alertId);
+      }
+    },
+    [activeOutOfZoneAlertId, removeFromQueue, triggerAlarm],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -388,7 +390,6 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
         debug: () => {},
         onConnect: () => {
           if (!alive) return;
-
           setConnected(true);
 
           client.subscribe('/topic/movement-alerts', (msg) => {
@@ -415,7 +416,7 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
       client.activate();
     }
 
-    connect();
+    void connect();
 
     return () => {
       alive = false;
@@ -424,24 +425,43 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
     };
   }, [upsert]);
 
-  const stopAlarm = useCallback(() => {
-    void stopAlertSound();
-    setIsAlarmActive(false);
-  }, []);
+  const acknowledgeActiveOutOfZoneAlert = useCallback(async () => {
+    if (!activeOutOfZoneAlert) {
+      stopAlarm();
+      return false;
+    }
 
-  const clearAlert = useCallback((id: number) => {
-    setAlerts((prev) => prev.filter((a) => (a as any).id !== id));
-    seenAlertIdsRef.current.delete(id);
-  }, []);
+    try {
+      const updated = await movementAlertsApi.acknowledge(activeOutOfZoneAlert.id);
+      upsert(updated);
+      removeFromQueue(getAlertId(activeOutOfZoneAlert), true);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [activeOutOfZoneAlert, removeFromQueue, stopAlarm, upsert]);
+
+  const clearAlert = useCallback(
+    (id: number) => {
+      setAlerts((prev) => prev.filter((alert) => alert.id !== id));
+      seenAlertIdsRef.current.delete(id);
+      removeFromQueue(id, activeOutOfZoneAlertId === id);
+    },
+    [activeOutOfZoneAlertId, removeFromQueue],
+  );
 
   const clearAll = useCallback(() => {
     setAlerts([]);
     seenAlertIdsRef.current.clear();
+    queuedAlarmIdsRef.current.clear();
+    alarmQueueRef.current = [];
+    setActiveOutOfZoneAlertId(null);
+    void stopAlertSound();
+    setIsAlarmActive(false);
   }, []);
 
   const setSoundEnabled = useCallback((value: boolean) => {
     setSoundEnabledState(value);
-
     if (!value) {
       void stopAlertSound();
       setIsAlarmActive(false);
@@ -450,31 +470,27 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
 
   const testSound = useCallback(async () => {
     await requestAlertPermissions();
-
     const ok = await playAlertSound();
 
     if (ok) {
       setIsAlarmActive(true);
       setSoundPermissionMessage(null);
-
       if (Platform.OS === 'web') {
         setWebAudioUnlocked(true);
       }
-
       return true;
     }
 
     setSoundPermissionMessage(
       Platform.OS === 'web'
-        ? "Le navigateur bloque encore le son. Cliquez sur “Activer”, puis retestez."
-        : "Impossible de tester le son sur ce téléphone.",
+        ? 'Le navigateur bloque encore le son. Cliquez sur "Activer", puis retestez.'
+        : 'Impossible de tester le son sur ce telephone.',
     );
-
     return false;
   }, [requestAlertPermissions]);
 
   const triggeredCount = useMemo(
-    () => alerts.filter((a) => a.status === 'TRIGGERED').length,
+    () => alerts.filter((alert) => alert.status !== 'RESOLVED').length,
     [alerts],
   );
 
@@ -483,6 +499,7 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
       value={{
         alerts,
         latestAlert,
+        activeOutOfZoneAlert,
         triggeredCount,
         connected,
         soundEnabled,
@@ -495,6 +512,7 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
         testSound,
         triggerAlarm,
         stopAlarm,
+        acknowledgeActiveOutOfZoneAlert,
         clearAlert,
         clearAll,
       }}

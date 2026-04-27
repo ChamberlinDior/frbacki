@@ -29,7 +29,7 @@ export type EventType =
 export type EventSeverity = 'INFO' | 'WARN' | 'CRITICAL';
 export type IncidentStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
 export type UserRole = 'ADMIN' | 'OPERATOR' | 'VIEWER' | 'TESTER';
-export type MovementAlertStatus = 'TRIGGERED' | 'RESOLVED';
+export type MovementAlertStatus = 'TRIGGERED' | 'ACKNOWLEDGED' | 'RESOLVED';
 
 export type AuthRequest = {
   username: string;
@@ -77,6 +77,7 @@ export type TerminalSummary = {
   serialNumber?: string | null;
   imei1?: string | null;
   androidId?: string | null;
+  model?: string | null;
   deviceId?: string | null;
   installationId?: string | null;
   hardwareId?: string | null;
@@ -399,13 +400,26 @@ export type CreateSiteRequest = {
 export type MovementAlert = {
   id: number;
   terminalId: number;
+  terminalName?: string | null;
+  authorizedZoneName?: string | null;
   triggeredAt: string;
+  acknowledgedAt?: string | null;
+  acknowledgedBy?: string | null;
   resolvedAt?: string | null;
+  returnedToZoneAt?: string | null;
   currentLat: number;
   currentLng: number;
   distanceFromBase: number;
   alertThreshold: number;
   status: MovementAlertStatus;
+  acknowledged?: boolean;
+  active?: boolean;
+  soundRequired?: boolean;
+  type?: string | null;
+  severity?: string | null;
+  zoneStatus?: string | null;
+  eventKey?: string | null;
+  message?: string | null;
 };
 
 export type TerminalConnectionHistoryResponse = {

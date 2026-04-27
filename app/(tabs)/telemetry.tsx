@@ -1,14 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -49,33 +51,13 @@ type ViewMode = 'CURRENT' | 'HISTORY';
 type StatusFilter = 'ALL' | 'ONLINE' | 'OFFLINE' | 'OUTSIDE_ZONE';
 
 function isTerminalOutsideAuthorizedZone(terminal?: TerminalSummary | null): boolean {
-  if (!terminal) return false;
-
-  return (
-    terminal.outsideAuthorizedZone === true ||
-    getGeofenceStatus(terminal) === 'outside'
-  );
-}
-
-function buildLiveAlertKey(alert: any): string {
-  return String(
-    alert?.id ??
-      `${alert?.terminalId ?? alert?.terminal?.id ?? 'terminal'}-${alert?.createdAt ?? alert?.eventTimestamp ?? Date.now()}`,
-  );
-}
-
-function getLiveAlertTerminalId(alert: any): number | null {
-  const raw =
-    alert?.terminalId ??
-    alert?.terminal?.id ??
-    alert?.terminalSummary?.id ??
-    alert?.device?.terminalId;
-
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : null;
+  return getGeofenceStatus(terminal) === 'outside';
 }
 
 export default function TelemetryScreen() {
+  const { width } = useWindowDimensions();
+  const isCompact = width < 1180;
+  const isDesktop = Platform.OS === 'web' && width >= 1180;
   const params = useLocalSearchParams<{ terminalId?: string }>();
   const terminalId = params.terminalId ? Number(params.terminalId) : null;
 
@@ -96,17 +78,10 @@ export default function TelemetryScreen() {
   const [historyRecords, setHistoryRecords] = useState<ConnectionHistoryItem[]>([]);
 
   const {
-    alerts: liveMovementAlerts,
-    triggerAlarm,
     isAlarmActive,
     stopAlarm,
     triggeredCount,
   } = useAlerts();
-
-  const alarmReadyRef = useRef(false);
-  const alarmLockRef = useRef(false);
-  const outsideStateByTerminalRef = useRef<Map<number, boolean>>(new Map());
-  const seenLiveAlertKeysRef = useRef<Set<string>>(new Set());
 
   const currentDevices = useDeduplicatedDevices(terminals);
 
@@ -162,11 +137,11 @@ export default function TelemetryScreen() {
         return false;
       }
 
-      if (statusFilter === 'ONLINE' && getConnectivityStatus(terminal) !== 'ONLINE') {
+      if (statusFilter === 'ONLINE' && (!terminal || getConnectivityStatus(terminal) !== 'ONLINE')) {
         return false;
       }
 
-      if (statusFilter === 'OFFLINE' && getConnectivityStatus(terminal) === 'ONLINE') {
+      if (statusFilter === 'OFFLINE' && terminal && getConnectivityStatus(terminal) === 'ONLINE') {
         return false;
       }
 
@@ -223,20 +198,6 @@ export default function TelemetryScreen() {
     [currentRows],
   );
 
-  const triggerTelemetryAlarm = useCallback(async () => {
-    if (alarmLockRef.current) return;
-
-    alarmLockRef.current = true;
-
-    try {
-      await triggerAlarm();
-    } finally {
-      setTimeout(() => {
-        alarmLockRef.current = false;
-      }, 1500);
-    }
-  }, [triggerAlarm]);
-
   const loadData = useCallback(async () => {
     try {
       setError(null);
@@ -263,63 +224,7 @@ export default function TelemetryScreen() {
     })();
   }, [loadData]);
 
-  useLiveRefresh(loadData, 5000);
-
-  useEffect(() => {
-    void loadData();
-  }, [liveMovementAlerts, loadData]);
-
-  useEffect(() => {
-    const currentOutsideByTerminal = new Map<number, boolean>(
-      currentDevices.map((terminal) => [
-        terminal.id,
-        isTerminalOutsideAuthorizedZone(terminal),
-      ]),
-    );
-
-    if (!alarmReadyRef.current) {
-      alarmReadyRef.current = true;
-      outsideStateByTerminalRef.current = currentOutsideByTerminal;
-
-      return;
-    }
-
-    for (const terminal of currentDevices) {
-      const isOutside = currentOutsideByTerminal.get(terminal.id) === true;
-      const wasOutside = outsideStateByTerminalRef.current.get(terminal.id) === true;
-
-      if (!wasOutside && isOutside) {
-        outsideStateByTerminalRef.current = currentOutsideByTerminal;
-        void triggerTelemetryAlarm();
-        return;
-      }
-    }
-
-    outsideStateByTerminalRef.current = currentOutsideByTerminal;
-  }, [currentDevices, triggerTelemetryAlarm]);
-
-  useEffect(() => {
-    for (const alert of liveMovementAlerts as any[]) {
-      if (alert?.status !== 'TRIGGERED') continue;
-
-      const alertTerminalId = getLiveAlertTerminalId(alert);
-      if (alertTerminalId == null) continue;
-
-      const terminal = currentDevices.find((item) => Number(item.id) === alertTerminalId);
-
-      if (!isTerminalOutsideAuthorizedZone(terminal)) {
-        continue;
-      }
-
-      const key = buildLiveAlertKey(alert);
-
-      if (seenLiveAlertKeysRef.current.has(key)) continue;
-
-      seenLiveAlertKeysRef.current.add(key);
-      void triggerTelemetryAlarm();
-      break;
-    }
-  }, [liveMovementAlerts, currentDevices, triggerTelemetryAlarm]);
+  useLiveRefresh(loadData, 1500);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -377,7 +282,7 @@ export default function TelemetryScreen() {
     <SafeAreaView style={s.safe}>
       <ScrollView
         style={s.safe}
-        contentContainerStyle={s.content}
+        contentContainerStyle={[s.content, isDesktop && s.contentWide]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={UI.info} />
         }
@@ -499,14 +404,27 @@ export default function TelemetryScreen() {
               <ActivityIndicator size="large" color={UI.info} />
             </View>
           ) : viewMode === 'CURRENT' ? (
-            <CurrentTelemetryTable
-              rows={currentRows}
-              onOpenMap={setMapTerminal}
-              onOpenHistory={openHistory}
-              onEditGeofence={setGeofenceTerminal}
-            />
+            isCompact ? (
+              <CurrentTelemetryCards
+                rows={currentRows}
+                onOpenMap={setMapTerminal}
+                onOpenHistory={openHistory}
+                onEditGeofence={setGeofenceTerminal}
+              />
+            ) : (
+              <CurrentTelemetryTable
+                rows={currentRows}
+                onOpenMap={setMapTerminal}
+                onOpenHistory={openHistory}
+                onEditGeofence={setGeofenceTerminal}
+              />
+            )
           ) : (
-            <TelemetryHistoryTable rows={historyRows} terminalsById={terminalsById} />
+            isCompact ? (
+              <TelemetryHistoryCards rows={historyRows} terminalsById={terminalsById} />
+            ) : (
+              <TelemetryHistoryTable rows={historyRows} terminalsById={terminalsById} />
+            )
           )}
         </View>
       </ScrollView>
@@ -579,6 +497,162 @@ function MetricCard({
   );
 }
 
+function CurrentTelemetryCards({
+  rows,
+  onOpenMap,
+  onOpenHistory,
+  onEditGeofence,
+}: {
+  rows: TerminalSummary[];
+  onOpenMap: (terminal: TerminalSummary) => void;
+  onOpenHistory: (terminal: TerminalSummary) => void;
+  onEditGeofence: (terminal: TerminalSummary) => void;
+}) {
+  if (rows.length === 0) {
+    return (
+      <View style={s.state}>
+        <Text style={s.stateText}>Aucun terminal courant ne correspond aux filtres.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={s.cardList}>
+      {rows.map((terminal) => {
+        const online = getConnectivityStatus(terminal) === 'ONLINE';
+        const lowBattery = (terminal.lastBatteryPercent ?? 100) <= 20;
+        const outside = isTerminalOutsideAuthorizedZone(terminal);
+
+        return (
+          <View key={terminal.id} style={[s.deviceCard, outside && s.deviceCardWarn]}>
+            <View style={s.deviceCardTop}>
+              <View style={{ flex: 1 }}>
+                <Text style={s.deviceCardTitle}>{getTerminalName(terminal)}</Text>
+                <Text style={s.deviceCardSub}>{terminal.serialNumber ?? terminal.deviceKey}</Text>
+              </View>
+              <StatusPill label={online ? 'En ligne' : 'Offline'} tone={online ? 'ok' : 'bad'} />
+            </View>
+
+            <View style={s.deviceMetaGrid}>
+              <MiniMetric label="Fraicheur" value={formatFreshness(terminal)} />
+              <MiniMetric label="Batterie" value={formatBattery(terminal.lastBatteryPercent)} />
+              <MiniMetric label="Reseau" value={formatNetwork(terminal.lastNetworkType)} />
+              <MiniMetric label="Signal" value={formatSignal(terminal.lastSignalLevel)} />
+              <MiniMetric
+                label="Stockage"
+                value={formatStorageFree(terminal.lastStorageFreeMb, terminal.lastStorageTotalMb)}
+              />
+              <MiniMetric
+                label="Zone"
+                value={terminal.authorizedZoneName ?? 'Zone non definie'}
+              />
+            </View>
+
+            <View style={s.deviceStatusRow}>
+              {outside ? (
+                <GeofenceStatusBadge terminal={terminal} />
+              ) : lowBattery ? (
+                <StatusPill label="Batterie faible" tone="warn" />
+              ) : (
+                <GeofenceStatusBadge terminal={terminal} />
+              )}
+            </View>
+
+            <View style={s.deviceActionRow}>
+              <Pressable style={s.deviceActionChip} onPress={() => onOpenMap(terminal)}>
+                <Ionicons name="navigate-outline" size={15} color={UI.info} />
+                <Text style={s.deviceActionText}>Suivre</Text>
+              </Pressable>
+              <Pressable style={s.deviceActionChip} onPress={() => onOpenHistory(terminal)}>
+                <Ionicons name="time-outline" size={15} color={UI.ink2} />
+                <Text style={s.deviceActionTextMuted}>Historique</Text>
+              </Pressable>
+              <Pressable style={s.deviceActionChip} onPress={() => onEditGeofence(terminal)}>
+                <Ionicons name="locate-outline" size={15} color={UI.warn} />
+                <Text style={s.deviceActionTextWarn}>Zone</Text>
+              </Pressable>
+              <Pressable style={s.deviceActionChip} onPress={() => router.push(`/terminal/${terminal.id}` as any)}>
+                <Ionicons name="open-outline" size={15} color={UI.ink2} />
+                <Text style={s.deviceActionTextMuted}>Fiche</Text>
+              </Pressable>
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function TelemetryHistoryCards({
+  rows,
+  terminalsById,
+}: {
+  rows: TelemetrySnapshot[];
+  terminalsById: Map<number, TerminalSummary>;
+}) {
+  if (rows.length === 0) {
+    return (
+      <View style={s.state}>
+        <Text style={s.stateText}>Aucun historique de telemetrie disponible.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={s.cardList}>
+      {rows.map((snapshot) => {
+        const terminal = terminalsById.get(snapshot.terminalId);
+        const lowBattery = (snapshot.batteryPercent ?? 100) <= 20;
+        const outside = isTerminalOutsideAuthorizedZone(terminal);
+
+        return (
+          <View key={snapshot.id} style={[s.deviceCard, outside && s.deviceCardWarn]}>
+            <View style={s.deviceCardTop}>
+              <View style={{ flex: 1 }}>
+                <Text style={s.deviceCardTitle}>
+                  {getTerminalName(
+                    terminal ?? { id: snapshot.terminalId, deviceKey: `terminal-${snapshot.terminalId}` },
+                  )}
+                </Text>
+                <Text style={s.deviceCardSub}>{formatDateTime(snapshot.capturedAt)}</Text>
+              </View>
+              {outside ? (
+                terminal ? (
+                  <GeofenceStatusBadge terminal={terminal} />
+                ) : (
+                  <StatusPill label="Hors zone" tone="bad" />
+                )
+              ) : lowBattery ? (
+                <StatusPill label="Batterie faible" tone="warn" />
+              ) : (
+                <StatusPill label="OK" tone="ok" />
+              )}
+            </View>
+
+            <View style={s.deviceMetaGrid}>
+              <MiniMetric label="Batterie" value={formatBattery(snapshot.batteryPercent)} />
+              <MiniMetric label="Reseau" value={formatNetwork(snapshot.networkType)} />
+              <MiniMetric label="Signal" value={formatSignal(snapshot.signalLevel)} />
+              <MiniMetric
+                label="Stockage"
+                value={formatStorageFree(snapshot.storageFreeMb, snapshot.storageTotalMb)}
+              />
+              <MiniMetric
+                label="Localisation"
+                value={snapshot.addressLine ?? snapshot.city ?? '—'}
+              />
+              <MiniMetric
+                label="Zone"
+                value={terminal?.authorizedZoneName ?? 'Zone libre'}
+              />
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 function CurrentTelemetryTable({
   rows,
   onOpenMap,
@@ -612,8 +686,8 @@ function CurrentTelemetryTable({
   ];
 
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-      <View style={{ minWidth: 1450 }}>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.tableScrollContent}>
+      <View style={s.tableCanvasCurrent}>
         <View style={[s.tableRow, s.headerRow]}>
           {columns.map((column, index) => (
             <Text key={column} style={[s.headerCell, currentColumn(index)]}>
@@ -719,8 +793,8 @@ function TelemetryHistoryTable({
   ];
 
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-      <View style={{ minWidth: 1490 }}>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.tableScrollContent}>
+      <View style={s.tableCanvasHistory}>
         <View style={[s.tableRow, s.headerRow]}>
           {columns.map((column, index) => (
             <Text key={column} style={[s.headerCell, historyColumn(index)]}>
@@ -783,6 +857,17 @@ function TelemetryHistoryTable({
   );
 }
 
+function MiniMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={s.miniMetric}>
+      <Text style={s.miniMetricLabel}>{label}</Text>
+      <Text style={s.miniMetricValue} numberOfLines={2}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
 function StatusPill({
   label,
   tone,
@@ -798,12 +883,12 @@ function StatusPill({
 }
 
 function currentColumn(index: number) {
-  const widths = [250, 120, 130, 100, 120, 100, 120, 180, 140, 190];
+  const widths = [220, 116, 118, 96, 110, 96, 116, 156, 136, 170];
   return { width: widths[index] };
 }
 
 function historyColumn(index: number) {
-  const widths = [230, 170, 110, 120, 100, 120, 220, 150, 140];
+  const widths = [210, 150, 100, 104, 92, 110, 190, 140, 128];
   return { width: widths[index] };
 }
 
@@ -816,6 +901,12 @@ const s = StyleSheet.create({
     padding: 20,
     gap: 20,
     paddingBottom: 40,
+  },
+  contentWide: {
+    width: '100%',
+    maxWidth: 1320,
+    alignSelf: 'center',
+    paddingHorizontal: 20,
   },
 
   activeAlarmPanel: {
@@ -894,6 +985,9 @@ const s = StyleSheet.create({
     color: UI.ink,
     fontSize: 30,
     fontWeight: '900',
+    textShadowColor: 'rgba(22,95,205,0.14)',
+    textShadowOffset: { width: 0, height: 10 },
+    textShadowRadius: 22,
   },
   subtitle: {
     marginTop: 10,
@@ -948,12 +1042,12 @@ const s = StyleSheet.create({
   },
   metricCard: {
     flexGrow: 1,
-    minWidth: 170,
+    minWidth: 156,
     backgroundColor: UI.white,
     borderRadius: 24,
     borderWidth: 1,
     borderColor: UI.stroke,
-    padding: 18,
+    padding: 16,
   },
   metricIcon: {
     width: 44,
@@ -963,16 +1057,16 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   metricValue: {
-    marginTop: 16,
+    marginTop: 14,
     color: UI.ink,
-    fontSize: 30,
+    fontSize: 28,
     fontWeight: '900',
   },
   metricLabel: {
     marginTop: 8,
     color: UI.muted,
     fontWeight: '700',
-    fontSize: 14,
+    fontSize: 15,
   },
   alertPanel: {
     backgroundColor: UI.badBg,
@@ -1063,6 +1157,112 @@ const s = StyleSheet.create({
     fontWeight: '700',
     fontSize: 14,
   },
+  cardList: {
+    gap: 14,
+  },
+  deviceCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: UI.stroke,
+    backgroundColor: UI.white,
+    padding: 16,
+    gap: 14,
+  },
+  deviceCardWarn: {
+    borderColor: '#F2C8C8',
+    backgroundColor: '#FFF8F4',
+  },
+  deviceCardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    alignItems: 'flex-start',
+  },
+  deviceCardTitle: {
+    color: UI.ink,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  deviceCardSub: {
+    marginTop: 4,
+    color: UI.muted,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  deviceMetaGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  miniMetric: {
+    flexGrow: 1,
+    minWidth: 132,
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: UI.card2,
+    borderWidth: 1,
+    borderColor: UI.stroke2,
+  },
+  miniMetricLabel: {
+    color: UI.muted2,
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  miniMetricValue: {
+    marginTop: 6,
+    color: UI.ink2,
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 18,
+  },
+  deviceStatusRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  deviceActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  deviceActionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 12,
+    backgroundColor: UI.card2,
+  },
+  deviceActionText: {
+    color: UI.info,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  deviceActionTextMuted: {
+    color: UI.ink2,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  deviceActionTextWarn: {
+    color: UI.warn,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  tableScrollContent: {
+    paddingLeft: 0,
+    paddingRight: 18,
+  },
+  tableCanvasCurrent: {
+    minWidth: 1334,
+    alignSelf: 'flex-start',
+  },
+  tableCanvasHistory: {
+    minWidth: 1224,
+    alignSelf: 'flex-start',
+  },
   tableRow: {
     flexDirection: 'row',
     borderBottomWidth: 1,
@@ -1077,35 +1277,35 @@ const s = StyleSheet.create({
     backgroundColor: '#FFF8F0',
   },
   headerCell: {
-    paddingVertical: 13,
-    paddingHorizontal: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 9,
     color: UI.muted2,
     fontWeight: '900',
-    fontSize: 11,
+    fontSize: 12,
   },
   cell: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 9,
     paddingVertical: 15,
     justifyContent: 'center',
   },
   primaryCell: {
     color: UI.ink,
     fontWeight: '900',
-    fontSize: 14,
+    fontSize: 15,
   },
   primaryCellSmall: {
     color: UI.ink2,
     fontWeight: '800',
-    fontSize: 13,
+    fontSize: 14,
   },
   secondaryCell: {
     marginTop: 4,
     color: UI.muted,
-    fontSize: 12,
+    fontSize: 13,
   },
   bodyText: {
     color: UI.ink2,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
   },
   statusPill: {

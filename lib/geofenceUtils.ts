@@ -51,15 +51,22 @@ export function getGeofenceDistance(terminal?: TerminalGeoLike | null): number |
 }
 
 export function getGeofenceStatus(terminal?: TerminalGeoLike | null): 'inside' | 'outside' | 'unknown' {
-  if (!terminal || !hasValidGeofence(terminal) || !hasValidTerminalPosition(terminal)) {
-    return 'unknown';
+  if (!terminal) return 'unknown';
+
+  const hasGeofence = hasValidGeofence(terminal);
+  const hasPosition = hasValidTerminalPosition(terminal);
+
+  if (hasGeofence && hasPosition) {
+    const distance = getGeofenceDistance(terminal);
+    if (distance != null && terminal.alertRadiusMeters != null) {
+      return distance > terminal.alertRadiusMeters ? 'outside' : 'inside';
+    }
   }
 
-  if (terminal.outsideAuthorizedZone) return 'outside';
+  if (terminal.outsideAuthorizedZone === true) return 'outside';
+  if (terminal.outsideAuthorizedZone === false && hasGeofence) return 'inside';
 
-  const distance = getGeofenceDistance(terminal);
-  if (distance == null || terminal.alertRadiusMeters == null) return 'unknown';
-  return distance > terminal.alertRadiusMeters ? 'outside' : 'inside';
+  return 'unknown';
 }
 
 export function getGeofenceLabel(terminal?: TerminalGeoLike | null): string {

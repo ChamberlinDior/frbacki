@@ -1,5 +1,6 @@
 import React from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { UI } from '../constants/theme';
 import type { TerminalSummary } from '../lib/types';
@@ -14,6 +15,7 @@ import {
   terminalHasGeofence,
   terminalHasPosition,
 } from '../lib/terminalPresentation';
+import { getGeofenceStatus } from '../lib/geofenceUtils';
 import { TerminalMap } from './TerminalMap';
 
 export function TerminalQuickViewModal({
@@ -26,13 +28,16 @@ export function TerminalQuickViewModal({
   onClose: () => void;
 }) {
   if (!terminal) return null;
+  const geofenceStatus = getGeofenceStatus(terminal);
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={s.overlay}>
+        <BlurView intensity={20} tint="light" style={s.blurWrap}>
         <View style={s.card}>
           <View style={s.header}>
             <View style={{ flex: 1 }}>
+              <Text style={s.eyebrow}>Vue rapide terminal</Text>
               <Text style={s.title}>{getTerminalName(terminal)}</Text>
               <Text style={s.sub}>{terminal.serialNumber ?? terminal.deviceKey}</Text>
             </View>
@@ -66,8 +71,8 @@ export function TerminalQuickViewModal({
               <Metric label="Connexions" value={String(terminal.totalConnectionCount ?? 0)} />
               <Metric
                 label="Hors zone"
-                value={terminal.outsideAuthorizedZone ? 'Oui' : 'Non'}
-                tone={terminal.outsideAuthorizedZone ? 'warn' : 'ok'}
+                value={geofenceStatus === 'outside' ? 'Oui' : geofenceStatus === 'inside' ? 'Non' : 'Indetermine'}
+                tone={geofenceStatus === 'outside' ? 'warn' : geofenceStatus === 'inside' ? 'ok' : 'info'}
               />
             </View>
 
@@ -105,6 +110,7 @@ export function TerminalQuickViewModal({
             </View>
           </ScrollView>
         </View>
+        </BlurView>
       </View>
     </Modal>
   );
@@ -133,18 +139,27 @@ function Metric({
 const s = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(18,50,74,0.42)',
+    backgroundColor: 'rgba(8,22,35,0.38)',
     justifyContent: 'center',
     padding: 18,
   },
+  blurWrap: {
+    borderRadius: 28,
+    overflow: 'hidden',
+  },
   card: {
-    backgroundColor: UI.white,
+    backgroundColor: 'rgba(255,255,255,0.86)',
     borderRadius: 28,
     borderWidth: 1,
-    borderColor: UI.stroke,
+    borderColor: 'rgba(255,255,255,0.55)',
     maxHeight: '92%',
     overflow: 'hidden',
     padding: 18,
+    shadowColor: '#0F2940',
+    shadowOffset: { width: 0, height: 20 },
+    shadowOpacity: 0.14,
+    shadowRadius: 34,
+    elevation: 18,
   },
   header: {
     flexDirection: 'row',
@@ -156,6 +171,13 @@ const s = StyleSheet.create({
     color: UI.ink,
     fontSize: 22,
     fontWeight: '900',
+  },
+  eyebrow: {
+    color: UI.info,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
   },
   sub: {
     color: UI.muted,
@@ -192,6 +214,8 @@ const s = StyleSheet.create({
     width: '48%',
     borderRadius: 18,
     padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.48)',
   },
   metricLabel: {
     color: UI.muted2,

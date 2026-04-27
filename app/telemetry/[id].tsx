@@ -1,6 +1,8 @@
-import { useLocalSearchParams } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { router, useLocalSearchParams } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ApiError, telemetryApi, terminalsApi } from '../../lib/api';
@@ -49,7 +51,7 @@ export default function TelemetryDetailScreen() {
     })();
   }, [load]);
 
-  useLiveRefresh(load, 5000);
+  useLiveRefresh(load, 1500);
 
   useEffect(() => {
     void load();
@@ -85,14 +87,20 @@ export default function TelemetryDetailScreen() {
       <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
         {error ? <NetworkErrorBanner message={error} /> : null}
 
-        <View style={s.hero}>
+        <Pressable style={s.backBtn} onPress={() => router.back()}>
+          <Ionicons name="arrow-back-outline" size={17} color={UI.info} />
+          <Text style={s.backBtnText}>Retour</Text>
+        </Pressable>
+
+        <LinearGradient colors={['rgba(255,255,255,0.94)', 'rgba(232,240,250,0.88)']} style={s.hero}>
           <View style={{ flex: 1 }}>
+            <Text style={s.eyebrow}>Snapshot detaille</Text>
             <Text style={s.title}>{getTerminalName(terminal)}</Text>
             <Text style={s.subtitle}>Snapshot du {formatDateTime(snap.capturedAt)}</Text>
             <Text style={s.subtitle}>Terminal #{snap.terminalId}</Text>
           </View>
           <GeofenceStatusBadge terminal={terminal} />
-        </View>
+        </LinearGradient>
 
         <View style={s.kpiRow}>
           <MetricCard label="Batterie" value={formatBattery(snap.batteryPercent)} tone="info" />
@@ -108,7 +116,7 @@ export default function TelemetryDetailScreen() {
               lat={snap.gpsLat}
               lng={snap.gpsLng}
               label={getTerminalName(terminal)}
-              zoneName={terminal.authorizedZoneName}
+              zoneName={terminal.authorizedZoneName ?? undefined}
               baseLatitude={terminal.baseLatitude}
               baseLongitude={terminal.baseLongitude}
               alertRadiusMeters={terminal.alertRadiusMeters}
@@ -176,15 +184,44 @@ const s = StyleSheet.create({
     gap: 16,
     paddingBottom: 36,
   },
-  hero: {
-    backgroundColor: UI.white,
-    borderRadius: 26,
+  backBtn: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: UI.infoBg,
     borderWidth: 1,
     borderColor: UI.stroke,
+  },
+  backBtnText: {
+    color: UI.info,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  hero: {
+    backgroundColor: UI.card,
+    borderRadius: 26,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.7)',
     padding: 18,
     flexDirection: 'row',
     gap: 12,
     alignItems: 'center',
+    shadowColor: '#0F2940',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.08,
+    shadowRadius: 28,
+    elevation: 8,
+  },
+  eyebrow: {
+    color: UI.info,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
   },
   title: {
     color: UI.ink,
@@ -217,11 +254,16 @@ const s = StyleSheet.create({
     fontSize: 18,
   },
   section: {
-    backgroundColor: UI.white,
+    backgroundColor: UI.card,
     borderRadius: 24,
     borderWidth: 1,
-    borderColor: UI.stroke,
+    borderColor: 'rgba(255,255,255,0.7)',
     padding: 16,
+    shadowColor: '#0F2940',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.05,
+    shadowRadius: 18,
+    elevation: 5,
   },
   sectionTitle: {
     color: UI.ink,

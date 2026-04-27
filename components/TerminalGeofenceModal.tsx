@@ -15,6 +15,7 @@ import { useTelemetryZones } from '../hooks/useTelemetryZones';
 import {
   formatDistanceMeters,
   getGeofenceDistance,
+  getGeofenceStatus,
   hasValidTerminalPosition,
 } from '../lib/geofenceUtils';
 import type { TerminalSummary, UpdateTerminalSettingsRequest } from '../lib/types';
@@ -44,6 +45,7 @@ export function TerminalGeofenceModal({
 
   const hasPosition = hasValidTerminalPosition(terminal);
   const liveDistance = useMemo(() => getGeofenceDistance(terminal), [terminal]);
+  const geofenceStatus = useMemo(() => getGeofenceStatus(terminal), [terminal]);
 
   useEffect(() => {
     const liveLat = terminal?.lastGpsLat;
@@ -96,8 +98,8 @@ export function TerminalGeofenceModal({
 
   function useCurrentPosition() {
     if (!hasPosition) return;
-    setBaseLat(String(terminal.lastGpsLat));
-    setBaseLng(String(terminal.lastGpsLng));
+    setBaseLat(String(terminal?.lastGpsLat ?? ''));
+    setBaseLng(String(terminal?.lastGpsLng ?? ''));
   }
 
   return (
@@ -150,11 +152,11 @@ export function TerminalGeofenceModal({
                   lng={terminal.lastGpsLng as number}
                   label={getTerminalName(terminal)}
                   height={190}
-                  zoneName={zoneName || terminal.authorizedZoneName}
+                  zoneName={zoneName || terminal.authorizedZoneName || undefined}
                   baseLatitude={Number(baseLat)}
                   baseLongitude={Number(baseLng)}
                   alertRadiusMeters={radiusNumber || undefined}
-                  outsideAuthorizedZone={terminal.outsideAuthorizedZone}
+                  outsideAuthorizedZone={geofenceStatus === 'outside'}
                 />
               </View>
             ) : null}
@@ -201,7 +203,7 @@ export function TerminalGeofenceModal({
               <SummaryRow label="Distance actuelle" value={formatDistanceMeters(liveDistance)} />
             </View>
 
-            {terminal.outsideAuthorizedZone ? (
+            {geofenceStatus === 'outside' ? (
               <View style={s.alertBox}>
                 <Ionicons name="alert-circle-outline" size={16} color={UI.bad} />
                 <Text style={s.alertText}>

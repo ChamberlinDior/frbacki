@@ -1,104 +1,36 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+
 import { UI } from '../constants/theme';
 import { loadLeaflet } from '../lib/leafletLoader';
+import {
+  fetchRoadRoute,
+  formatDistanceKm,
+  formatDurationMinutes,
+  getRouteKey,
+  type RoadRoute,
+} from '../lib/roadRoute';
 
-type RouteInfo = {
-  distanceM: number;
-  durationS: number;
-};
-
-function formatDistance(meters: number): string {
-  if (meters < 1000) return `${Math.round(meters)} m`;
-  return `${(meters / 1000).toFixed(1)} km`;
-}
-
-function formatDuration(seconds: number): string {
-  const mins = Math.round(seconds / 60);
-  if (mins < 60) return `${mins} min`;
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return m > 0 ? `${h}h ${m}min` : `${h}h`;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
-
-function createAdminIcon(L: any): any {
-  return L.divIcon({
-    html: `<div style="
-      width:38px;height:38px;
-      background:#1F6FE5;
-      border:3px solid #ffffff;
-      border-radius:50%;
-      box-shadow:0 3px 14px rgba(31,111,229,0.55),0 0 0 4px rgba(31,111,229,0.18);
-      display:flex;
-      align-items:center;
-      justify-content:center;
-    ">
-      <div style="width:12px;height:12px;background:#ffffff;border-radius:50%;"></div>
-    </div>`,
-    className: '',
-    iconSize: [38, 38],
-    iconAnchor: [19, 19],
-    popupAnchor: [0, -24],
-  });
-}
-
-function createTargetIcon(L: any): any {
-  return L.divIcon({
-    html: `<div style="position:relative;width:38px;height:52px;display:flex;flex-direction:column;align-items:center;">
-      <div style="
-        width:38px;height:38px;
-        background:#D64545;
-        border:3px solid #ffffff;
-        border-radius:50% 50% 50% 0;
-        transform:rotate(-45deg);
-        box-shadow:0 3px 14px rgba(214,69,69,0.55),0 0 0 4px rgba(214,69,69,0.18);
-        display:flex;
-        align-items:center;
-        justify-content:center;
-        flex-shrink:0;
-      ">
-        <div style="
-          width:12px;height:12px;
-          background:#ffffff;
-          border-radius:50%;
-          transform:rotate(45deg);
-        "></div>
-      </div>
-    </div>`,
-    className: '',
-    iconSize: [38, 52],
-    iconAnchor: [19, 52],
-    popupAnchor: [0, -56],
-  });
-}
+type Point = { latitude: number; longitude: number };
 
 export function AlertRouteMap({
   adminLocation,
   targetLocation,
   targetLabel,
 }: {
-  adminLocation: { latitude: number; longitude: number } | null;
-  targetLocation: { latitude: number; longitude: number } | null;
+  adminLocation: Point | null;
+  targetLocation: Point | null;
   targetLabel: string;
 }) {
   const containerRef = useRef<any>(null);
   const mapRef = useRef<any>(null);
-  const layersRef = useRef<any[]>([]);
-  const routeLayerRef = useRef<any>(null);
-  const routeHaloRef = useRef<any>(null);
-  const routeRequestSeqRef = useRef(0);
-  const userInteractedRef = useRef(false);
-  const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
-  const [routeLoading, setRouteLoading] = useState(false);
+  const layerRef = useRef<any[]>([]);
+  const autoFitDoneRef = useRef(false);
+  const lastTargetKeyRef = useRef<string | null>(null);
+  const [route, setRoute] = useState<RoadRoute | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const targetKey = useMemo(() => getRouteKey(targetLocation), [targetLocation]);
 
   useEffect(() => {
     return () => {
@@ -112,242 +44,122 @@ export function AlertRouteMap({
   useEffect(() => {
     let cancelled = false;
 
-    async function initIfNeeded() {
-      if (!adminLocation || !targetLocation || mapRef.current || !containerRef.current) return;
+    async function loadRoute() {
+      if (!adminLocation || !targetLocation) {
+        setRoute(null);
+        return;
+      }
 
-      await loadLeaflet();
-      if (cancelled || mapRef.current || !containerRef.current) return;
-
-      const L = window.L;
-      if (!L) return;
-
-      const map = L.map(containerRef.current as any, {
-        zoomControl: true,
-        scrollWheelZoom: true,
-        doubleClickZoom: true,
-        dragging: true,
-        preferCanvas: false,
-      });
-
-      // CartoDB Positron — propre, professionnel, lisible
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        maxZoom: 19,
-        subdomains: 'abcd',
-        detectRetina: true,
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-      }).addTo(map);
-
-      map.on('dragstart zoomstart movestart', () => {
-        userInteractedRef.current = true;
-      });
-
-      mapRef.current = map;
-      redraw();
+      setLoading(true);
+      const result = await fetchRoadRoute(adminLocation, targetLocation);
+      if (!cancelled) {
+        setRoute(result);
+        setLoading(false);
+      }
     }
 
-    initIfNeeded().catch(() => {});
-
+    void loadRoute();
     return () => {
       cancelled = true;
     };
   }, [adminLocation, targetLocation]);
 
+  function fitRoute(force = false) {
+    if (!mapRef.current || !route || route.coordinates.length === 0) return;
+    const targetChanged = lastTargetKeyRef.current !== targetKey;
+    if (!force && autoFitDoneRef.current && !targetChanged) return;
+
+    const bounds = window.L.latLngBounds(
+      route.coordinates.map((point) => [point.latitude, point.longitude]),
+    );
+    mapRef.current.fitBounds(bounds.pad(0.2));
+    autoFitDoneRef.current = true;
+    lastTargetKeyRef.current = targetKey;
+  }
+
   useEffect(() => {
-    if (adminLocation && targetLocation) return;
-    if (!mapRef.current) return;
+    let cancelled = false;
 
-    mapRef.current.remove();
-    mapRef.current = null;
-    layersRef.current = [];
-    routeLayerRef.current = null;
-    routeHaloRef.current = null;
-    routeRequestSeqRef.current += 1;
-    userInteractedRef.current = false;
-    setRouteInfo(null);
-  }, [adminLocation, targetLocation]);
+    async function renderMap() {
+      if (!containerRef.current || !adminLocation || !targetLocation) return;
 
-  useEffect(() => {
-    if (!mapRef.current) return;
-    redraw();
-  }, [adminLocation, targetLocation, targetLabel]);
+      await loadLeaflet();
+      if (cancelled || !containerRef.current) return;
 
-  function clearLayers() {
-    const map = mapRef.current;
-    if (!map) return;
-    layersRef.current.forEach((layer) => {
-      try { map.removeLayer(layer); } catch { /* noop */ }
-    });
-    layersRef.current = [];
-    routeLayerRef.current = null;
-    routeHaloRef.current = null;
-  }
+      const L = window.L;
+      if (!L) return;
 
-  function redraw() {
-    const map = mapRef.current;
-    const L = window.L;
-    if (!map || !L || !adminLocation || !targetLocation) return;
+      if (!mapRef.current) {
+        mapRef.current = L.map(containerRef.current as any, {
+          zoomControl: true,
+          scrollWheelZoom: true,
+          dragging: true,
+        });
 
-    clearLayers();
-
-    const adminPoint: [number, number] = [adminLocation.latitude, adminLocation.longitude];
-    const targetPoint: [number, number] = [targetLocation.latitude, targetLocation.longitude];
-
-    const adminMarker = L.marker(adminPoint, { icon: createAdminIcon(L) })
-      .addTo(map)
-      .bindPopup(`
-        <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-width:160px;">
-          <div style="font-weight:800;font-size:13px;color:#1F6FE5;margin-bottom:4px;">Position admin</div>
-          <div style="font-size:12px;color:#58748D;line-height:1.6;">
-            Lat: ${adminPoint[0].toFixed(5)}<br/>Lng: ${adminPoint[1].toFixed(5)}
-          </div>
-        </div>
-      `);
-
-    const targetMarker = L.marker(targetPoint, { icon: createTargetIcon(L) })
-      .addTo(map)
-      .bindPopup(`
-        <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-width:180px;">
-          <div style="font-weight:800;font-size:13px;color:#D64545;margin-bottom:4px;">${escapeHtml(targetLabel)}</div>
-          <div style="font-size:12px;color:#58748D;line-height:1.6;">
-            Lat: ${targetPoint[0].toFixed(5)}<br/>Lng: ${targetPoint[1].toFixed(5)}
-          </div>
-        </div>
-      `);
-
-    targetMarker.openPopup();
-
-    layersRef.current.push(adminMarker, targetMarker);
-    setFallbackRoute(L, [adminPoint, targetPoint]);
-
-    if (!userInteractedRef.current) {
-      map.fitBounds([adminPoint, targetPoint], { padding: [64, 64], maxZoom: 16 });
-    }
-
-    void loadDrivingRoute(adminPoint, targetPoint, L);
-  }
-
-  async function loadDrivingRoute(
-    adminPoint: [number, number],
-    targetPoint: [number, number],
-    L: any,
-  ) {
-    const map = mapRef.current;
-    if (!map || !L) return;
-
-    const seq = ++routeRequestSeqRef.current;
-    setRouteLoading(true);
-
-    try {
-      const url = `https://router.project-osrm.org/route/v1/driving/${adminPoint[1]},${adminPoint[0]};${targetPoint[1]},${targetPoint[0]}?overview=full&geometries=geojson`;
-      const response = await fetch(url);
-      if (!response.ok) throw new Error('route fetch failed');
-      const payload = await response.json();
-      const route = payload?.routes?.[0];
-      const coordinates = route?.geometry?.coordinates;
-
-      if (!Array.isArray(coordinates) || coordinates.length === 0 || seq !== routeRequestSeqRef.current) {
-        return;
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+          maxZoom: 19,
+          subdomains: 'abcd',
+          detectRetina: true,
+          attribution:
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        }).addTo(mapRef.current);
       }
 
-      if (route?.distance != null && route?.duration != null) {
-        setRouteInfo({ distanceM: route.distance, durationS: route.duration });
-      }
+      if (!route) return;
 
-      setRouteLayer(
-        L,
-        coordinates.map(([lng, lat]: [number, number]) => [lat, lng] as [number, number]),
-      );
-    } catch {
-      if (seq === routeRequestSeqRef.current) {
-        setFallbackRoute(L, [adminPoint, targetPoint]);
-      }
-    } finally {
-      if (seq === routeRequestSeqRef.current) {
-        setRouteLoading(false);
-      }
+      layerRef.current.forEach((layer) => {
+        try {
+          mapRef.current.removeLayer(layer);
+        } catch {}
+      });
+      layerRef.current = [];
+
+      const adminMarker = L.circleMarker([adminLocation.latitude, adminLocation.longitude], {
+        radius: 10,
+        color: '#9ad7ff',
+        weight: 3,
+        fillColor: '#38bdf8',
+        fillOpacity: 1,
+      })
+        .addTo(mapRef.current)
+        .bindPopup('Position operateur');
+
+      const targetMarker = L.circleMarker([targetLocation.latitude, targetLocation.longitude], {
+        radius: 12,
+        color: '#ffd4d4',
+        weight: 3,
+        fillColor: UI.bad,
+        fillOpacity: 1,
+      })
+        .addTo(mapRef.current)
+        .bindPopup(targetLabel);
+
+      const routeLine = L.polyline(
+        route.coordinates.map((point) => [point.latitude, point.longitude]),
+        {
+          color: '#7dd3fc',
+          weight: 4,
+          opacity: 0.92,
+          dashArray: route.source === 'google' ? undefined : '10 10',
+        },
+      ).addTo(mapRef.current);
+
+      layerRef.current = [adminMarker, targetMarker, routeLine];
+      fitRoute(false);
     }
-  }
 
-  function setFallbackRoute(L: any, coordinates: [number, number][]) {
-    const map = mapRef.current;
-    if (!map) return;
-    clearRouteLayer();
-
-    const halo = L.polyline(coordinates, {
-      color: '#1F6FE5',
-      weight: 14,
-      opacity: 0.12,
-      lineCap: 'round',
-      lineJoin: 'round',
-    }).addTo(map);
-
-    const line = L.polyline(coordinates, {
-      color: '#1F6FE5',
-      weight: 4,
-      opacity: 0.7,
-      lineCap: 'round',
-      lineJoin: 'round',
-      dashArray: '8 6',
-    }).addTo(map);
-
-    routeHaloRef.current = halo;
-    routeLayerRef.current = line;
-    layersRef.current.push(halo, line);
-  }
-
-  function setRouteLayer(L: any, coordinates: [number, number][]) {
-    const map = mapRef.current;
-    if (!map) return;
-    clearRouteLayer();
-
-    const halo = L.polyline(coordinates, {
-      color: '#1F6FE5',
-      weight: 16,
-      opacity: 0.14,
-      lineCap: 'round',
-      lineJoin: 'round',
-    }).addTo(map);
-
-    const line = L.polyline(coordinates, {
-      color: '#1F6FE5',
-      weight: 5,
-      opacity: 0.92,
-      lineCap: 'round',
-      lineJoin: 'round',
-    }).addTo(map);
-
-    routeHaloRef.current = halo;
-    routeLayerRef.current = line;
-    layersRef.current.push(halo, line);
-  }
-
-  function clearRouteLayer() {
-    const map = mapRef.current;
-    if (!map) return;
-    if (routeHaloRef.current) {
-      try { map.removeLayer(routeHaloRef.current); } catch { /* noop */ }
-      layersRef.current = layersRef.current.filter((l) => l !== routeHaloRef.current);
-      routeHaloRef.current = null;
-    }
-    if (routeLayerRef.current) {
-      try { map.removeLayer(routeLayerRef.current); } catch { /* noop */ }
-      layersRef.current = layersRef.current.filter((l) => l !== routeLayerRef.current);
-      routeLayerRef.current = null;
-    }
-  }
+    void renderMap();
+    return () => {
+      cancelled = true;
+    };
+  }, [adminLocation, targetLocation, targetLabel, route, targetKey]);
 
   if (!adminLocation || !targetLocation) {
     return (
       <View style={s.empty}>
-        <View style={s.emptyIconWrap}>
-          <Text style={s.emptyIconText}>—</Text>
-        </View>
-        <Text style={s.emptyTitle}>Itineraire indisponible</Text>
+        <Text style={s.emptyTitle}>Suivi indisponible</Text>
         <Text style={s.emptyText}>
-          {!adminLocation
-            ? 'Position admin non disponible (GPS requis).'
-            : 'Coordonnees GPS du TPE absentes.'}
+          La position operateur ou la position exacte du TPE manque encore.
         </Text>
       </View>
     );
@@ -355,130 +167,147 @@ export function AlertRouteMap({
 
   return (
     <View style={s.wrap}>
-      <View ref={containerRef as any} style={s.map as any} />
-
-      {/* Panneau route — distance + duree */}
-      {(routeInfo || routeLoading) && (
-        <View style={s.routeInfo}>
-          {routeLoading && !routeInfo ? (
-            <Text style={s.routeLoading}>Calcul de l'itineraire...</Text>
-          ) : routeInfo ? (
-            <>
-              <View style={s.routeInfoItem}>
-                <View style={[s.routeInfoDot, { backgroundColor: UI.info }]} />
-                <View>
-                  <Text style={s.routeInfoLabel}>Distance</Text>
-                  <Text style={s.routeInfoValue}>{formatDistance(routeInfo.distanceM)}</Text>
-                </View>
-              </View>
-              <View style={s.routeInfoSep} />
-              <View style={s.routeInfoItem}>
-                <View style={[s.routeInfoDot, { backgroundColor: UI.warn }]} />
-                <View>
-                  <Text style={s.routeInfoLabel}>Duree estimee</Text>
-                  <Text style={s.routeInfoValue}>{formatDuration(routeInfo.durationS)}</Text>
-                </View>
-              </View>
-            </>
-          ) : null}
+      <View style={s.mapStats}>
+        <View style={s.statCard}>
+          <Text style={s.statLabel}>Distance route</Text>
+          <Text style={s.statValue}>{formatDistanceKm(route?.distanceMeters)}</Text>
         </View>
-      )}
+        <View style={s.statCard}>
+          <Text style={s.statLabel}>ETA route</Text>
+          <Text style={s.statValue}>{formatDurationMinutes(route?.durationSeconds)}</Text>
+        </View>
+        <View style={s.statCard}>
+          <Text style={s.statLabel}>Mode</Text>
+          <Text style={s.statValueSmall}>
+            {route?.source === 'google' ? 'Route calculee' : 'Estimation secours'}
+          </Text>
+        </View>
+      </View>
+
+      <View style={s.mapWrap}>
+        <View ref={containerRef as any} style={s.map as any} />
+
+        <Pressable style={s.recenterBtn} onPress={() => fitRoute(true)}>
+          <Text style={s.recenterBtnText}>Recentrer</Text>
+        </Pressable>
+
+        {loading ? (
+          <View style={s.loadingPill}>
+            <ActivityIndicator color={UI.info} size="small" />
+            <Text style={s.loadingText}>Calcul de l'itineraire...</Text>
+          </View>
+        ) : null}
+      </View>
     </View>
   );
 }
 
 const s = StyleSheet.create({
   wrap: {
-    width: '100%',
-    borderRadius: 0,
+    borderRadius: 22,
     overflow: 'hidden',
-    backgroundColor: UI.card,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.18)',
+    backgroundColor: 'rgba(5,10,20,0.9)',
   },
-  map: {
-    width: '100%',
-    height: 440,
-  },
-  routeInfo: {
+  mapStats: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 0,
-    borderTopWidth: 1,
-    borderTopColor: UI.stroke,
-    backgroundColor: UI.card2,
-  },
-  routeInfoItem: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexWrap: 'wrap',
     gap: 10,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
+    padding: 14,
+    backgroundColor: 'rgba(7,16,31,0.96)',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(148,163,184,0.14)',
   },
-  routeInfoDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    flexShrink: 0,
+  statCard: {
+    flexGrow: 1,
+    minWidth: 140,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
+    backgroundColor: 'rgba(15,23,42,0.86)',
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.14)',
   },
-  routeInfoLabel: {
-    color: UI.muted,
+  statLabel: {
+    color: '#8aa3bb',
     fontSize: 11,
     fontWeight: '700',
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 1,
+    marginBottom: 6,
   },
-  routeInfoValue: {
-    color: UI.ink,
-    fontSize: 16,
-    fontWeight: '900',
-    marginTop: 2,
+  statValue: {
+    color: '#f8fbff',
+    fontSize: 20,
+    fontWeight: '800',
   },
-  routeInfoSep: {
-    width: 1,
-    height: 36,
-    backgroundColor: UI.stroke,
-  },
-  routeLoading: {
-    flex: 1,
-    textAlign: 'center',
-    color: UI.muted,
-    fontSize: 12,
+  statValueSmall: {
+    color: '#f8fbff',
+    fontSize: 13,
     fontWeight: '700',
-    paddingVertical: 12,
+  },
+  mapWrap: {
+    position: 'relative',
+  },
+  map: {
+    width: '100%',
+    height: 360,
+  },
+  recenterBtn: {
+    position: 'absolute',
+    right: 14,
+    bottom: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(7,16,31,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.18)',
+  },
+  recenterBtnText: {
+    color: '#e8f3ff',
+    fontWeight: '900',
+    fontSize: 12,
+  },
+  loadingPill: {
+    position: 'absolute',
+    left: 14,
+    bottom: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderWidth: 1,
+    borderColor: UI.stroke,
+  },
+  loadingText: {
+    color: UI.ink,
+    fontWeight: '800',
+    fontSize: 12,
   },
   empty: {
-    width: '100%',
-    minHeight: 200,
+    minHeight: 260,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.18)',
+    backgroundColor: 'rgba(10,18,34,0.72)',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: UI.card2,
     padding: 24,
-    gap: 8,
-  },
-  emptyIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: UI.stroke,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emptyIconText: {
-    color: UI.muted,
-    fontSize: 20,
-    fontWeight: '700',
   },
   emptyTitle: {
     color: UI.ink,
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '800',
-    marginTop: 4,
   },
   emptyText: {
+    marginTop: 8,
     color: UI.muted,
     textAlign: 'center',
     lineHeight: 20,
-    fontSize: 13,
-    maxWidth: 280,
   },
 });

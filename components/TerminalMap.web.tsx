@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { UI } from '../constants/theme';
-import { getGeofenceColors, getGeofenceDistance, getGeofenceLabel } from '../lib/geofenceUtils';
+import { getGeofenceColors, getGeofenceDistance, getGeofenceLabel, getGeofenceStatus } from '../lib/geofenceUtils';
 import { loadLeaflet } from '../lib/leafletLoader';
 import type { TerminalSummary } from '../lib/types';
 import {
@@ -55,7 +55,7 @@ function popupHtml(terminal: TerminalSummary): string {
   const statusColor = isOnline ? '#1F9D61' : '#D64545';
   const statusBg = isOnline ? '#E8F7EF' : '#FCE7E7';
   const statusLabel = isOnline ? 'En ligne' : 'Hors ligne';
-  const outside = terminal.outsideAuthorizedZone;
+  const outside = getGeofenceStatus(terminal) === 'outside';
   const geofenceColor = outside ? '#D64545' : (outside === false ? '#1F9D61' : '#9AB0C4');
   const geofenceBg = outside ? '#FCE7E7' : (outside === false ? '#E8F7EF' : '#F5F8FC');
   const geofenceLabel = getGeofenceLabel(terminal);
@@ -171,6 +171,12 @@ export function TerminalMap({
   const onSelectTerminalRef = useRef(onSelectTerminal);
   const positioned = useMemo(() => terminals.filter(terminalHasPosition), [terminals]);
   const mapHeight = useMemo(() => Math.max(280, height), [height]);
+  const mapStats = useMemo(() => {
+    const online = positioned.filter((terminal) => getConnectivityStatus(terminal) === 'ONLINE').length;
+    const outside = positioned.filter((terminal) => getGeofenceStatus(terminal) === 'outside').length;
+    const withGeofence = positioned.filter((terminal) => terminalHasGeofence(terminal)).length;
+    return { online, outside, withGeofence };
+  }, [positioned]);
 
   useEffect(() => {
     onSelectTerminalRef.current = onSelectTerminal;
@@ -246,7 +252,7 @@ export function TerminalMap({
       const lng = terminal.lastGpsLng as number;
       const colors = getGeofenceColors(terminal);
       const isOnline = getConnectivityStatus(terminal) === 'ONLINE';
-      const isOutsideZone = Boolean(terminal.outsideAuthorizedZone);
+      const isOutsideZone = getGeofenceStatus(terminal) === 'outside';
 
       const markerColor = isOutsideZone
         ? colors.marker
@@ -338,6 +344,20 @@ export function TerminalMap({
 
   return (
     <View style={s.outer}>
+      <View style={s.topBar}>
+        <View>
+          <Text style={s.topEyebrow}>Cartographie temps reel</Text>
+          <Text style={s.topTitle}>Suivi geospatial des terminaux</Text>
+        </View>
+
+        <View style={s.kpiRow}>
+          <MapPill label={`${positioned.length} visibles`} tone="info" />
+          <MapPill label={`${mapStats.online} en ligne`} tone="ok" />
+          <MapPill label={`${mapStats.outside} hors zone`} tone={mapStats.outside > 0 ? 'bad' : 'ok'} />
+          <MapPill label={`${mapStats.withGeofence} zones`} tone="info" />
+        </View>
+      </View>
+
       {positioned.length === 0 ? (
         <View style={[s.empty, { height: mapHeight }]}>
           <View style={s.emptyIconWrap}>
@@ -350,11 +370,48 @@ export function TerminalMap({
           </Text>
         </View>
       ) : (
-        <View
-          ref={containerRef as any}
-          style={[s.map as any, { height: mapHeight }]}
-        />
+        <View style={s.mapWrap}>
+          <View
+            ref={containerRef as any}
+            style={[s.map as any, { height: mapHeight }]}
+          />
+
+          <View pointerEvents="none" style={s.legend}>
+            <LegendDot color={UI.info} label="Terminal en ligne" />
+            <LegendDot color="#8896A8" label="Terminal hors ligne" />
+            <LegendDot color={UI.bad} label="Hors zone autorisee" />
+          </View>
+        </View>
       )}
+    </View>
+  );
+}
+
+function MapPill({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: 'ok' | 'bad' | 'info';
+}) {
+  const palette = {
+    ok: { bg: 'rgba(31,157,97,0.12)', fg: UI.ok },
+    bad: { bg: 'rgba(214,69,69,0.12)', fg: UI.bad },
+    info: { bg: 'rgba(31,111,229,0.12)', fg: UI.info },
+  }[tone];
+
+  return (
+    <View style={[s.mapPill, { backgroundColor: palette.bg }]}>
+      <Text style={[s.mapPillText, { color: palette.fg }]}>{label}</Text>
+    </View>
+  );
+}
+
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <View style={s.legendItem}>
+      <View style={[s.legendDot, { backgroundColor: color }]} />
+      <Text style={s.legendText}>{label}</Text>
     </View>
   );
 }
@@ -362,14 +419,85 @@ export function TerminalMap({
 const s = StyleSheet.create({
   outer: {
     width: '100%',
-    borderRadius: 16,
+    borderRadius: 24,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: UI.stroke,
-    backgroundColor: UI.card,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+  },
+  topBar: {
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(215,227,242,0.85)',
+    backgroundColor: 'rgba(248,251,255,0.92)',
+    gap: 12,
+  },
+  topEyebrow: {
+    color: UI.info,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+  },
+  topTitle: {
+    marginTop: 4,
+    color: UI.ink,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  kpiRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  mapPill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  mapPillText: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  mapWrap: {
+    position: 'relative',
   },
   map: {
     width: '100%',
+  },
+  legend: {
+    position: 'absolute',
+    left: 14,
+    bottom: 14,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(255,255,255,0.88)',
+    borderWidth: 1,
+    borderColor: 'rgba(215,227,242,0.92)',
+    shadowColor: '#12324A',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 20,
+    elevation: 10,
+    gap: 6,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  legendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+  },
+  legendText: {
+    color: UI.ink2,
+    fontSize: 12,
+    fontWeight: '700',
   },
   empty: {
     width: '100%',

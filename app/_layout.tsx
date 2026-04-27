@@ -1,12 +1,7 @@
-/**
- * app/_layout.tsx — Layout racine avec guard d'authentification
- * + bannière d'alarme globale persistante
- * + activation globale du son / notifications
- */
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Platform,
   Pressable,
@@ -16,15 +11,12 @@ import {
   View,
 } from 'react-native';
 
-import { AuthProvider, useAuth } from '../contexts/AuthContext';
+import { OutOfZoneAlertModal } from '../components/OutOfZoneAlertModal';
+import { UI } from '../constants/theme';
 import { AlertProvider, useAlerts } from '../contexts/AlertContext';
+import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import { registerUnauthorizedHandler } from '../lib/api';
 import { startAgent, stopAgent } from '../lib/agentService';
-import { UI } from '../constants/theme';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Guard navigation
-// ─────────────────────────────────────────────────────────────────────────────
 
 function NavigationGuard({ children }: { children: React.ReactNode }) {
   const { isLoading, isAuthenticated, logout } = useAuth();
@@ -49,7 +41,6 @@ function NavigationGuard({ children }: { children: React.ReactNode }) {
     if (isLoading) return;
 
     const inLoginScreen = segments[0] === 'login';
-
     if (!isAuthenticated && !inLoginScreen) {
       router.replace('/login');
     } else if (isAuthenticated && inLoginScreen) {
@@ -60,15 +51,13 @@ function NavigationGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Bannière globale : alarme + autorisations son/notifications
-// ─────────────────────────────────────────────────────────────────────────────
-
 function GlobalAlarmBanner() {
   const {
     connected,
     isAlarmActive,
     stopAlarm,
+    activeOutOfZoneAlert,
+    acknowledgeActiveOutOfZoneAlert,
     triggeredCount,
     latestAlert,
     soundEnabled,
@@ -79,11 +68,11 @@ function GlobalAlarmBanner() {
     requestAlertPermissions,
     testSound,
   } = useAlerts();
+  const [acknowledging, setAcknowledging] = useState(false);
 
   const latestMessage =
-    (latestAlert as any)?.message ??
-    (latestAlert as any)?.description ??
-    (latestAlert as any)?.type ??
+    latestAlert?.message ??
+    latestAlert?.type ??
     null;
 
   const alarmLabel =
@@ -97,102 +86,112 @@ function GlobalAlarmBanner() {
     notificationPermission !== 'granted' ||
     (Platform.OS === 'web' && soundEnabled && !webAudioUnlocked);
 
-  if (!isAlarmActive && !shouldShowPermissionPanel) {
+  if (!isAlarmActive && !shouldShowPermissionPanel && !activeOutOfZoneAlert) {
     return null;
   }
 
   return (
-    <View style={ab.container} pointerEvents="box-none">
-      {isAlarmActive ? (
-        <View style={ab.alarmPanel}>
-          <View style={ab.left}>
-            <View style={ab.iconWrapDanger}>
-              <Ionicons name="warning" size={20} color="#fff" />
+    <>
+      <View style={ab.container} pointerEvents="box-none">
+        {isAlarmActive ? (
+          <View style={ab.alarmPanel}>
+            <View style={ab.left}>
+              <View style={ab.iconWrapDanger}>
+                <Ionicons name="warning" size={20} color="#fff" />
+              </View>
+
+              <View style={ab.textWrap}>
+                <Text style={ab.titleDanger}>ALARME ACTIVE</Text>
+                <Text style={ab.subDanger} numberOfLines={2}>
+                  {alarmLabel}
+                </Text>
+                <Text style={ab.metaDanger}>
+                  Sirene en boucle - acquittement recommande.
+                </Text>
+              </View>
             </View>
 
-            <View style={ab.textWrap}>
-              <Text style={ab.titleDanger}>ALARME ACTIVE</Text>
-              <Text style={ab.subDanger} numberOfLines={2}>
-                {alarmLabel}
-              </Text>
-              <Text style={ab.metaDanger}>
-                Sirène en boucle — arrêt manuel requis.
-              </Text>
-            </View>
-          </View>
-
-          <Pressable style={ab.stopBtn} onPress={stopAlarm}>
-            <Ionicons name="volume-mute" size={16} color="#fff" />
-            <Text style={ab.stopText}>Couper</Text>
-          </Pressable>
-        </View>
-      ) : null}
-
-      {shouldShowPermissionPanel ? (
-        <View style={ab.permissionPanel}>
-          <View style={ab.permissionLeft}>
-            <View style={ab.iconWrapInfo}>
-              <Ionicons
-                name={connected ? 'notifications-outline' : 'cloud-offline-outline'}
-                size={18}
-                color={UI.info}
-              />
-            </View>
-
-            <View style={ab.textWrap}>
-              <Text style={ab.permissionTitle}>
-                Autorisations des alertes
-              </Text>
-
-              <Text style={ab.permissionText} numberOfLines={3}>
-                {soundPermissionMessage ??
-                  "Active le son et les notifications pour recevoir les alertes depuis toutes les pages."}
-              </Text>
-
-              <Text style={ab.permissionMeta}>
-                WebSocket : {connected ? 'connecté' : 'déconnecté'} · Notifications : {notificationPermission}
-                {Platform.OS === 'web'
-                  ? ` · Son web : ${webAudioUnlocked ? 'autorisé' : 'à activer'}`
-                  : ''}
-              </Text>
-            </View>
-          </View>
-
-          <View style={ab.actions}>
-            <View style={ab.soundSwitch}>
-              <Text style={ab.soundSwitchLabel}>Son</Text>
-              <Switch
-                value={soundEnabled}
-                onValueChange={setSoundEnabled}
-                trackColor={{ true: UI.info, false: UI.stroke }}
-              />
-            </View>
-
-            <Pressable
-              style={ab.enableBtn}
-              onPress={() => {
-                void requestAlertPermissions();
-              }}
-            >
-              <Ionicons name="shield-checkmark-outline" size={16} color="#fff" />
-              <Text style={ab.enableBtnText}>
-                {Platform.OS === 'web' && webAudioUnlocked ? 'Autorisé' : 'Activer'}
-              </Text>
-            </Pressable>
-
-            <Pressable
-              style={ab.testBtn}
-              onPress={() => {
-                void testSound();
-              }}
-            >
-              <Ionicons name="volume-high-outline" size={16} color={UI.info} />
-              <Text style={ab.testBtnText}>Tester</Text>
+            <Pressable style={ab.stopBtn} onPress={stopAlarm}>
+              <Ionicons name="volume-mute" size={16} color="#fff" />
+              <Text style={ab.stopText}>Couper</Text>
             </Pressable>
           </View>
-        </View>
-      ) : null}
-    </View>
+        ) : null}
+
+        {shouldShowPermissionPanel ? (
+          <View style={ab.permissionPanel}>
+            <View style={ab.permissionLeft}>
+              <View style={ab.iconWrapInfo}>
+                <Ionicons
+                  name={connected ? 'notifications-outline' : 'cloud-offline-outline'}
+                  size={18}
+                  color={UI.info}
+                />
+              </View>
+
+              <View style={ab.textWrap}>
+                <Text style={ab.permissionTitle}>Autorisations des alertes</Text>
+
+                <Text style={ab.permissionText} numberOfLines={3}>
+                  {soundPermissionMessage ??
+                    'Active le son et les notifications pour recevoir les alertes depuis toutes les pages.'}
+                </Text>
+
+                <Text style={ab.permissionMeta}>
+                  WebSocket : {connected ? 'connecte' : 'deconnecte'} · Notifications : {notificationPermission}
+                  {Platform.OS === 'web'
+                    ? ` · Son web : ${webAudioUnlocked ? 'autorise' : 'a activer'}`
+                    : ''}
+                </Text>
+              </View>
+            </View>
+
+            <View style={ab.actions}>
+              <View style={ab.soundSwitch}>
+                <Text style={ab.soundSwitchLabel}>Son</Text>
+                <Switch
+                  value={soundEnabled}
+                  onValueChange={setSoundEnabled}
+                  trackColor={{ true: UI.info, false: UI.stroke }}
+                />
+              </View>
+
+              <Pressable
+                style={ab.enableBtn}
+                onPress={() => {
+                  void requestAlertPermissions();
+                }}
+              >
+                <Ionicons name="shield-checkmark-outline" size={16} color="#fff" />
+                <Text style={ab.enableBtnText}>
+                  {Platform.OS === 'web' && webAudioUnlocked ? 'Autorise' : 'Activer'}
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={ab.testBtn}
+                onPress={() => {
+                  void testSound();
+                }}
+              >
+                <Ionicons name="volume-high-outline" size={16} color={UI.info} />
+                <Text style={ab.testBtnText}>Tester</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+      </View>
+
+      <OutOfZoneAlertModal
+        alert={activeOutOfZoneAlert}
+        visible={Boolean(activeOutOfZoneAlert)}
+        acknowledging={acknowledging}
+        onAcknowledge={() => {
+          setAcknowledging(true);
+          void acknowledgeActiveOutOfZoneAlert().finally(() => setAcknowledging(false));
+        }}
+      />
+    </>
   );
 }
 
@@ -230,7 +229,6 @@ const ab = StyleSheet.create({
     }),
     gap: 8,
   } as any,
-
   alarmPanel: {
     backgroundColor: '#120305',
     borderRadius: 22,
@@ -402,10 +400,6 @@ const ab = StyleSheet.create({
   },
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Contenu principal
-// ─────────────────────────────────────────────────────────────────────────────
-
 function AppContent() {
   return (
     <View style={{ flex: 1 }}>
@@ -423,7 +417,7 @@ function AppContent() {
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen
             name="terminal/[id]"
-            options={{ title: 'Détail TPE', headerBackTitle: 'Retour' }}
+            options={{ title: 'Detail TPE', headerBackTitle: 'Retour' }}
           />
           <Stack.Screen
             name="incident/[id]"
@@ -436,10 +430,6 @@ function AppContent() {
     </View>
   );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Layout racine
-// ─────────────────────────────────────────────────────────────────────────────
 
 export default function RootLayout() {
   return (
