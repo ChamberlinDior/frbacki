@@ -4,6 +4,7 @@ import type { TerminalSummary } from '../lib/types';
 import { TerminalMap } from './TerminalMap';
 
 interface Props {
+  terminalId?: number;
   lat: number;
   lng: number;
   label?: string;
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export function MapEmbed({
+  terminalId,
   lat,
   lng,
   label,
@@ -27,7 +29,7 @@ export function MapEmbed({
   outsideAuthorizedZone,
 }: Props) {
   const terminal: TerminalSummary = {
-    id: 0,
+    id: terminalId ?? 0,
     deviceKey: label ?? 'map',
     displayName: label ?? 'Position TPE',
     lastGpsLat: lat,

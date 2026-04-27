@@ -183,6 +183,7 @@ export default function TerminalDetailScreen() {
             {terminal.lastGpsLat != null && terminal.lastGpsLng != null ? (
               <Section title="Carte et perimetre autorise">
                 <MapEmbed
+                  terminalId={terminal.id}
                   lat={terminal.lastGpsLat}
                   lng={terminal.lastGpsLng}
                   label={getTerminalName(terminal)}

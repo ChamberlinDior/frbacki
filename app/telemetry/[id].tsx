@@ -113,6 +113,7 @@ export default function TelemetryDetailScreen() {
           <View style={s.section}>
             <Text style={s.sectionTitle}>Carte de position et perimetre</Text>
             <MapEmbed
+              terminalId={terminal.id}
               lat={snap.gpsLat}
               lng={snap.gpsLng}
               label={getTerminalName(terminal)}

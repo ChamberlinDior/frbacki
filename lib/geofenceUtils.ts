@@ -1,10 +1,14 @@
 import { UI } from '../constants/theme';
+import { getLiveMovementSnapshot } from './liveMovementState';
 import type { Terminal, TerminalSummary } from './types';
 
 export type TerminalGeoLike = TerminalSummary | Terminal;
 
 export function hasValidTerminalPosition(terminal?: TerminalGeoLike | null): boolean {
-  return terminal?.lastGpsLat != null && terminal?.lastGpsLng != null;
+  const live = getLiveMovementSnapshot(terminal?.id);
+  const lat = live?.currentLat ?? terminal?.lastGpsLat;
+  const lng = live?.currentLng ?? terminal?.lastGpsLng;
+  return lat != null && lng != null;
 }
 
 export function hasValidGeofence(terminal?: TerminalGeoLike | null): boolean {
@@ -42,9 +46,10 @@ export function getDistanceMeters(
 
 export function getGeofenceDistance(terminal?: TerminalGeoLike | null): number | null {
   if (!terminal) return null;
+  const live = getLiveMovementSnapshot(terminal.id);
   return getDistanceMeters(
-    terminal.lastGpsLat,
-    terminal.lastGpsLng,
+    live?.currentLat ?? terminal.lastGpsLat,
+    live?.currentLng ?? terminal.lastGpsLng,
     terminal.baseLatitude,
     terminal.baseLongitude,
   );
@@ -61,6 +66,11 @@ export function getGeofenceStatus(terminal?: TerminalGeoLike | null): 'inside' |
     if (distance != null && terminal.alertRadiusMeters != null) {
       return distance > terminal.alertRadiusMeters ? 'outside' : 'inside';
     }
+  }
+
+  const live = getLiveMovementSnapshot(terminal.id);
+  if (live) {
+    return live.outside ? 'outside' : 'inside';
   }
 
   if (terminal.outsideAuthorizedZone === true) return 'outside';

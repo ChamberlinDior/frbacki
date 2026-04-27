@@ -148,6 +148,7 @@ export function TerminalGeofenceModal({
             {hasPosition ? (
               <View style={s.mapWrap}>
                 <MapEmbed
+                  terminalId={terminal.id}
                   lat={terminal.lastGpsLat as number}
                   lng={terminal.lastGpsLng as number}
                   label={getTerminalName(terminal)}

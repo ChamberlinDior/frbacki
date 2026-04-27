@@ -12,6 +12,11 @@ import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 
 import type { MovementAlert } from '../lib/types';
+import {
+  clearAllLiveMovementSnapshots,
+  clearLiveMovementSnapshot,
+  setLiveMovementSnapshot,
+} from '../lib/liveMovementState';
 import * as tokenStore from '../lib/tokenStore';
 import { getWebSocketUrl, movementAlertsApi } from '../lib/api';
 import {
@@ -339,6 +344,13 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
       }
 
       setLatestAlert(incoming);
+      setLiveMovementSnapshot({
+        terminalId: incoming.terminalId,
+        outside: incoming.status !== 'RESOLVED',
+        currentLat: incoming.currentLat,
+        currentLng: incoming.currentLng,
+        updatedAt: Date.now(),
+      });
       setAlerts((prev) => {
         const idx = prev.findIndex((item) => getAlertId(item) === alertId);
         if (idx >= 0) {
@@ -443,11 +455,15 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
 
   const clearAlert = useCallback(
     (id: number) => {
+      const alert = alerts.find((item) => item.id === id);
       setAlerts((prev) => prev.filter((alert) => alert.id !== id));
       seenAlertIdsRef.current.delete(id);
+      if (alert) {
+        clearLiveMovementSnapshot(alert.terminalId);
+      }
       removeFromQueue(id, activeOutOfZoneAlertId === id);
     },
-    [activeOutOfZoneAlertId, removeFromQueue],
+    [activeOutOfZoneAlertId, alerts, removeFromQueue],
   );
 
   const clearAll = useCallback(() => {
@@ -456,6 +472,7 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
     queuedAlarmIdsRef.current.clear();
     alarmQueueRef.current = [];
     setActiveOutOfZoneAlertId(null);
+    clearAllLiveMovementSnapshots();
     void stopAlertSound();
     setIsAlarmActive(false);
   }, []);
