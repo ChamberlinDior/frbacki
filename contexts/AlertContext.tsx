@@ -183,6 +183,8 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
   const clientRef = useRef<Client | null>(null);
   const appStateRef = useRef(AppState.currentState);
   const alertsRef = useRef<MovementAlert[]>([]);
+  const activeOutOfZoneAlertIdRef = useRef<number | string | null>(null);
+  const connectedRef = useRef(false);
   const seenAlertIdsRef = useRef<Set<number | string>>(new Set());
   const queuedAlarmIdsRef = useRef<Set<number | string>>(new Set());
   const queuedAlarmTerminalIdsRef = useRef<Set<number>>(new Set());
@@ -199,6 +201,14 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     alertsRef.current = alerts;
   }, [alerts]);
+
+  useEffect(() => {
+    activeOutOfZoneAlertIdRef.current = activeOutOfZoneAlertId;
+  }, [activeOutOfZoneAlertId]);
+
+  useEffect(() => {
+    connectedRef.current = connected;
+  }, [connected]);
 
   useEffect(() => {
     soundEnabledRef.current = soundEnabled;
@@ -363,7 +373,7 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
         queuedAlarmTerminalIdsRef.current.delete(alert.terminalId);
       }
 
-      const wasActive = activeOutOfZoneAlertId === alertId;
+      const wasActive = activeOutOfZoneAlertIdRef.current === alertId;
       const nextId = alarmQueueRef.current[0] ?? null;
 
       if (!wasActive) {
@@ -381,7 +391,7 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
         void playQueuedAlarm(nextId);
       }
     },
-    [activeOutOfZoneAlertId, playQueuedAlarm],
+    [playQueuedAlarm],
   );
 
   const upsert = useCallback(
@@ -448,10 +458,10 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
         } else {
           acknowledgedOutsideTerminalIdsRef.current.delete(incoming.terminalId);
         }
-        removeFromQueue(alertId, activeOutOfZoneAlertId === alertId);
+        removeFromQueue(alertId, activeOutOfZoneAlertIdRef.current === alertId);
       }
     },
-    [activeOutOfZoneAlertId, removeFromQueue, triggerAlarm],
+    [removeFromQueue, triggerAlarm],
   );
 
   const triggerSyntheticOutOfZoneAlert = useCallback(
@@ -520,9 +530,9 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
             : alert,
         ),
       );
-      removeFromQueue(syntheticId, activeOutOfZoneAlertId === syntheticId);
+      removeFromQueue(syntheticId, activeOutOfZoneAlertIdRef.current === syntheticId);
     },
-    [activeOutOfZoneAlertId, removeFromQueue],
+    [removeFromQueue],
   );
 
   const syncMovementAlerts = useCallback(async () => {
@@ -644,6 +654,9 @@ export function AlertProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const id = setInterval(() => {
+      if (connectedRef.current) {
+        return;
+      }
       void syncMovementAlerts();
     }, 5000);
 
